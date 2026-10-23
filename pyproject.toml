@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools==83.0.0", "wheel==0.47.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lake-equity"
+version = "0.1.0"
+description = "Versioned financial data and causal structure research workbench"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+requires-python = ">=3.12,<3.13"
+dependencies = ["fastapi==0.142.2", "uvicorn==0.54.0", "cnequity==0.18.0", "duckdb==1.4.3", "pandas==3.0.6", "numpy==2.5.3", "filelock==3.32.2"]
+
+[project.urls]
+Repository = "https://github.com/zhaozhenxiong/Lake_equity"
+Issues = "https://github.com/zhaozhenxiong/Lake_equity/issues"
+
+[project.optional-dependencies]
+learning = ["scikit-learn==1.7.2", "lightgbm==4.7.0", "pyarrow==25.0.1", "torch==2.13.0"]
+
+[project.scripts]
+lake-equity = "lake_equity.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "packages/khquant_research/app"]
+addopts = "-ra"

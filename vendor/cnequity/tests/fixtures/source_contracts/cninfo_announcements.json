@@ -1,0 +1,17 @@
+{
+  "source": "cninfo",
+  "contract_version": 1,
+  "trade_date": "2024-06-28",
+  "pages": {
+    "szse": [[{
+      "secCode": "000001",
+      "announcementId": "A1",
+      "announcementTitle": "半年报",
+      "announcementType": "定期报告",
+      "announcementTime": 1719559800000,
+      "adjunctUrl": "/a1.pdf"
+    }]],
+    "sse": [[]]
+  },
+  "expected": {"symbol": "000001.SZ", "title": "半年报", "rows": 1}
+}

@@ -1,0 +1,2 @@
+# Preserve the exact bytes recorded in frozen source and release manifests.
+* -text

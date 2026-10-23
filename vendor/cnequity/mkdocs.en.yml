@@ -1,0 +1,74 @@
+# The English documentation site, built into site/en/ after the Chinese site:
+#
+#   mkdocs build --strict && mkdocs build --strict -f mkdocs.en.yml
+#
+# Everything not set here (markdown extensions, validation, theme features,
+# shared overrides and CSS) comes from mkdocs.yml. docs/en/ is an independent
+# page tree: its pages link only to each other.
+INHERIT: mkdocs.yml
+
+site_description: A daily-updated, traceable A-share research data lake
+site_url: https://rootsunc.github.io/CNEquity/en/
+edit_uri: edit/main/docs/en/
+docs_dir: docs/en
+site_dir: site/en
+exclude_docs: ""
+
+theme:
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quickstart: getting-started/quickstart.md
+      - Installation and upgrades: getting-started/installation.md
+      - Initialization, scope and resume: getting-started/initialization.md
+      - Configuration reference: getting-started/configuration.md
+  - Research and data:
+      - Recipes:
+          - Recipe index: recipes/README.md
+          - Price adjustment research baseline: recipes/research-baseline.md
+          - PIT rebalance cross-section: recipes/pit-rebalance.md
+          - DuckDB and Polars: recipes/duckdb-polars.md
+          - Commodity futures and options: recipes/derivatives.md
+          - 15 / 30 / 60-minute bars: recipes/minute-bars-15-30-60.md
+      - Data reference:
+          - Dataset catalog: datasets/catalog.md
+          - Query guide: datasets/query-guide.md
+          - Fields and units: datasets/schema.md
+          - Data contract: datasets/contract.md
+          - Sources and history limits: datasets/sources.md
+          - Universe profiles: reference/universe-profiles.md
+  - Commands and API:
+      - CLI reference: reference/cli.md
+      - CLI options and defaults: reference/cli-options.md
+      - Network and write inventory: reference/cli-surface.md
+      - Python API: reference/python-api.md
+      - MCP integration: reference/mcp.md
+  - Operations:
+      - Runbook: operations/runbook.md
+      - Troubleshooting: operations/troubleshooting.md
+      - Fetching, speed and source protection: operations/fetch-policy.md
+      - Source health: operations/source-health.md
+      - Repository scripts: operations/scripts.md
+  - Product design:
+      - Product direction and scope: architecture/overview.md
+      - Comparison with AKShare and Tushare: architecture/comparison.md
+      - Design principles: architecture/design-principles.md
+      - From collection to query: architecture/data-flow.md
+      - Lake layout: architecture/lake-layout.md
+  - Project and maintenance:
+      - Changelog: changelog.md
+      - License, sources and citation: legal-and-data-sources.md
+      - Maintainer release checklist: operations/releasing.md

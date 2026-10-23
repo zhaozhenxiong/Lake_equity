@@ -1,0 +1,122 @@
+import uuid
+
+import pytest
+
+import cnequity.steps  # noqa: F401 — register steps
+from cnequity.orchestrator.deps import (
+    CyclicDependencyError,
+    UnknownStepError,
+    step_execution_levels,
+    validate_steps_registered,
+)
+from cnequity.orchestrator.registry import STEP_REGISTRY, register_step
+
+
+def test_trading_status_waits_for_instruments():
+    """A security listing today reaches trading_status through the run context
+    that `instruments` fills, so the two cannot share a parallel level."""
+    levels = step_execution_levels(["instruments", "trading_calendar", "trading_status"])
+    assert len(levels) == 2
+    assert set(levels[0]) == {"instruments", "trading_calendar"}
+    assert levels[1] == ["trading_status"]
+
+
+def test_corp_actions_before_daily_bars_in_sequential_wave():
+    levels = step_execution_levels(["corporate_actions", "daily_bars"])
+    assert levels[0] == ["corporate_actions"]
+    assert levels[1] == ["daily_bars"]
+
+
+def test_unknown_step_raises():
+    with pytest.raises(UnknownStepError, match="not_a_step"):
+        validate_steps_registered(["instruments", "not_a_step"])
+
+
+def test_cyclic_dependency_raises():
+    suffix = uuid.uuid4().hex[:8]
+    name_a = f"cycle_a_{suffix}"
+    name_b = f"cycle_b_{suffix}"
+
+    # `register_step` writes to a process-global registry, so a throwaway step
+    # left behind is visible to every test that runs after this one — including
+    # any that counts the registry. The unique suffix keeps the names from
+    # colliding; it does nothing about the two extra entries.
+    try:
+
+        @register_step(name_a, depends_on=[name_b])
+        def _cycle_a(config, trade_date, run_id, context):
+            return {}
+
+        @register_step(name_b, depends_on=[name_a])
+        def _cycle_b(config, trade_date, run_id, context):
+            return {}
+
+        with pytest.raises(CyclicDependencyError):
+            step_execution_levels([name_a, name_b])
+    finally:
+        STEP_REGISTRY.pop(name_a, None)
+        STEP_REGISTRY.pop(name_b, None)
+
+
+def test_core_group_level1_has_concurrent_tdx_steps():
+    """corporate_actions (xdxr) and index_bars must not run in parallel without TDX lock."""
+    levels = step_execution_levels(["corporate_actions", "index_bars"])
+    assert len(levels) == 1
+    assert set(levels[0]) == {"corporate_actions", "index_bars"}
+
+
+def test_compact_runs_after_fetch_steps_in_core_group():
+    steps = [
+        "instruments",
+        "trading_calendar",
+        "trading_status",
+        "corporate_actions",
+        "daily_bars",
+        "index_bars",
+        "compact",
+        "derive_adj_factors",
+        "derive_industry_index",
+    ]
+    levels = step_execution_levels(steps)
+    flat = [s for level in levels for s in level]
+    assert flat.index("compact") > flat.index("daily_bars")
+    assert flat.index("derive_adj_factors") > flat.index("compact")
+    assert flat.index("derive_industry_index") > flat.index("derive_adj_factors")
+
+
+def test_capital_group_runs_compact_last():
+    steps = [
+        "fund_flow",
+        "northbound_holdings",
+        "northbound_flows",
+        "margin_trading",
+        "valuation_metrics",
+        "sector_members",
+        "announcement_index",
+        "compact",
+    ]
+    levels = step_execution_levels(steps)
+    assert levels[-1] == ["compact"]
+
+
+def test_finalize_wave_order():
+    levels = step_execution_levels(
+        ["compact", "derive_adj_factors", "derive_industry_index", "audit"]
+    )
+    assert levels == [
+        ["compact"],
+        ["derive_adj_factors"],
+        ["derive_industry_index"],
+        ["audit"],
+    ]
+
+
+def test_finalize_subset_skips_missing_steps():
+    levels = step_execution_levels(["compact", "audit"])
+    assert levels[-2:] == [["compact"], ["audit"]]
+
+
+def test_core_snapshot_can_depend_on_compact_in_finalize_wave():
+    levels = step_execution_levels(["daily_bars", "compact", "ths_official_snapshot", "audit"])
+    flat = [name for level in levels for name in level]
+    assert flat == ["daily_bars", "compact", "ths_official_snapshot", "audit"]

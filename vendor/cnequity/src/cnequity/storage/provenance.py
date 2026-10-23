@@ -1,0 +1,97 @@
+"""Safe runtime identity attached to dataset revision receipts."""
+
+from __future__ import annotations
+
+import functools
+import hashlib
+import json
+import os
+import subprocess
+from dataclasses import fields
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from typing import Any
+
+from cnequity.config import Config
+
+_SECRET_FIELDS = frozenset({"tushare_token", "eastmoney_proxy", "_rate_limiters"})
+_LOCATION_FIELDS = frozenset({"data_root", "config_path", "duckdb_path"})
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return value.as_posix()
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in sorted(value.items())}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def config_fingerprint(config: Config) -> str:
+    """Hash data-affecting configuration without serialising credentials or paths."""
+    payload: dict[str, Any] = {}
+    for item in fields(config):
+        name = item.name
+        value = getattr(config, name)
+        if name in _SECRET_FIELDS:
+            if name == "tushare_token":
+                payload["tushare_configured"] = bool(value)
+            elif name == "eastmoney_proxy":
+                payload["eastmoney_proxy_configured"] = bool(value)
+            continue
+        if name in _LOCATION_FIELDS:
+            continue
+        payload[name] = _json_value(value)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _package_version() -> str:
+    try:
+        return version("cnequity")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+@functools.lru_cache(maxsize=1)
+def _git_identity() -> tuple[str | None, bool | None]:
+    # The checkout's HEAD and working-tree state do not change within a single
+    # CLI invocation, and every caller (compaction, snapshot creation) is a
+    # short-lived process. Caching collapses repeated lineage stamps in one
+    # process to a single pair of subprocesses.
+    override = os.getenv("CNEQUITY_GIT_COMMIT")
+    if override:
+        return override, None
+    checkout = Path(__file__).resolve().parents[3]
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=no"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    return commit or None, bool(status.strip())
+
+
+def runtime_lineage(config: Config) -> dict[str, Any]:
+    """Return non-secret code and configuration identity for a run receipt."""
+    commit, dirty = _git_identity()
+    return {
+        "package_version": _package_version(),
+        "git_commit": commit,
+        "git_dirty": dirty,
+        "config_fingerprint": config_fingerprint(config),
+    }

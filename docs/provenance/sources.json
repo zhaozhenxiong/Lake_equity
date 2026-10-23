@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "source": "cnequity",
+      "version": "0.18.0",
+      "git_head": null,
+      "dirty": null,
+      "archive_sha256": "3c59025465b4a8e7c2839a68405410dbdfb7347d6cb1ada21e398911f0359ed0",
+      "original_manifest_sha256": "9df95243d69dee0d3c6f456126d32d416b7c59ec9d3babc30b9dbca5db5c4766",
+      "original_file_count": 1052,
+      "distributed_file_count": 1052
+    },
+    {
+      "source": "khquant",
+      "version": null,
+      "git_head": "ba81bb3225ca58e14652a627323d29e0078a5ebb",
+      "dirty": true,
+      "archive_sha256": null,
+      "original_manifest_sha256": "c626f415b5c90755732a0d0b1a60f3cae730da2243354c46151e0f96b5a9319e",
+      "original_file_count": 852,
+      "distributed_file_count": 813
+    }
+  ],
+  "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original engine and native wheel bytes are unchanged."
+}

@@ -1,0 +1,51 @@
+# Local gate for the two checks CI's `quality` job runs (.github/workflows/ci.yml).
+# Both had already been documented in docs/development/conventions.md and run by hand, which is
+# how 145 commits still accumulated formatter drift across 53 files and turned
+# the push red — the same failure 7b34ca7 cleaned up once before. Documenting a
+# command does not enforce it; this does.
+#
+# Install once per clone:
+#   pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push
+#
+# The rev is pinned to the same ruff minor line as the `dev` dependency group in
+# pyproject.toml, for the reason stated there: the formatter's line-wrapping
+# changes between minors, so an unpinned hook turns an upstream release into a
+# diff on code nobody touched. Bump both together.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      # pre-commit passes staged filenames explicitly, which bypasses ruff's
+      # extend-exclude. `force-exclude = true` in pyproject.toml is what keeps
+      # these hooks off the vendored tdxpy tree under adapters/tdx_protocol/_wire.
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # SECURITY.md asks reporters to flag keys found in git history, but nothing
+  # stopped one getting there. This scans staged content before the commit
+  # exists; `.github/workflows/security.yml` scans the full history, because a
+  # local hook only protects clones that installed it.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      # A Chinese doc edit without the matching English one turned every CI job
+      # red through tests/unit/test_docs_i18n.py; this fails the commit instead.
+      - id: doc-translations
+        name: docs/en is not behind docs/zh
+        entry: python scripts/dev/doc_translations.py
+        language: python
+        files: ^(docs/(zh|en)/|scripts/dev/i18n/doc_sources\.json$)
+        pass_filenames: false
+      # Installed with `pre-commit install --hook-type pre-push`; see the script.
+      - id: unit-tests
+        name: unit tests (repo venv + Python 3.10)
+        entry: scripts/dev/pre_push.sh
+        language: script
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true

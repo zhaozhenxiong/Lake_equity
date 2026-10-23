@@ -1,0 +1,65 @@
+# Byte-compiled / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+site/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.json
+coverage.xml
+
+# scripts/dev/probe_blank_frame_broadcast.py output
+blank_frame_broadcasts.txt
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+!.env.sample
+configs/*.local.toml
+configs/cnequity.toml
+configs/cnequity.demo.toml
+configs/*.bak*
+
+# Data lake artifacts (never commit generated data)
+data/
+*.duckdb
+*.duckdb.wal
+
+# Runtime logs (prefer {data.root}/logs/; never commit either)
+logs/
+
+# Local AI / editor tooling
+.claude/
+.cursor/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Frontend build inputs (the built bundle IS committed — see frontend/README.md)
+frontend/node_modules/
+
+# Local agent instructions, not part of the project.
+AGENTS.md
+
+# Operator journals, campaign scripts and private research notes (see private/README.md).
+/private/
+
+# Local validation reports (CI may still generate these as artifacts).
+/evidence/

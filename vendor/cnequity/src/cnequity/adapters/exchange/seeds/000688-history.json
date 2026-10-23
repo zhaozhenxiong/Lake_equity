@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "catalog_version": "000688-20200723-20260930-v1",
+  "index_symbol": "000688.SH",
+  "member_count": 50,
+  "opening_date": "2020-07-23",
+  "closing_date": "2026-09-30",
+  "opening": {
+    "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10077925/files/1e710951ab8d4f0997e3737eee6ebc86.xlsx",
+    "request_params": {},
+    "source": "exchange",
+    "sha256": "7cf6a9ea64f5d2c32210339c0d9838d1c3d26fc2e905361ebf6f6f00e1571557",
+    "format": "xlsx"
+  },
+  "opening_notice": {
+    "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20200619_5130634.shtml",
+    "request_params": {},
+    "source": "exchange",
+    "sha256": "18852f73cf06cda3f80d87f4929264e96f8fd6e332b720c8569ffb7d80dae0be",
+    "format": "html"
+  },
+  "closing_reference": {
+    "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/file/autofile/closeweight/000688closeweight.xls",
+    "request_params": {},
+    "publisher_payload_sha256": "3385624149422a7eccbaf9d13ef21729415c123be643f973478a06b344838c23",
+    "members": [
+      "688002.SH",
+      "688008.SH",
+      "688009.SH",
+      "688012.SH",
+      "688027.SH",
+      "688036.SH",
+      "688041.SH",
+      "688047.SH",
+      "688072.SH",
+      "688082.SH",
+      "688099.SH",
+      "688111.SH",
+      "688120.SH",
+      "688122.SH",
+      "688126.SH",
+      "688169.SH",
+      "688183.SH",
+      "688187.SH",
+      "688188.SH",
+      "688213.SH",
+      "688220.SH",
+      "688223.SH",
+      "688249.SH",
+      "688256.SH",
+      "688271.SH",
+      "688303.SH",
+      "688347.SH",
+      "688361.SH",
+      "688375.SH",
+      "688396.SH",
+      "688469.SH",
+      "688472.SH",
+      "688498.SH",
+      "688506.SH",
+      "688521.SH",
+      "688525.SH",
+      "688568.SH",
+      "688578.SH",
+      "688599.SH",
+      "688629.SH",
+      "688702.SH",
+      "688728.SH",
+      "688729.SH",
+      "688775.SH",
+      "688777.SH",
+      "688795.SH",
+      "688802.SH",
+      "688820.SH",
+      "688981.SH",
+      "689009.SH"
+    ]
+  },
+  "events": [
+    {
+      "effective_date": "2020-09-14",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20200828_5194557.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "b79d466e67dfb50b3c885f7b4b285aef76a02195f95b30a5c151fad05852761b",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2020-12-14",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20201127_5268302.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "ae8552e90e37567984c43d88b5222133ab1b5c3d8b7e21452c8b542d1c9dfb4b",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2021-03-15",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20210226_5328101.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "3d33285d9e3679f6c0f5664ef494c27f53f5d2470c8954666fd620f5e772a579",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2021-06-15",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20210528_5476669.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "6c192f94402aad3c903c39b104cf74b85e935fb9e741df74dba7a571c538d007",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2021-09-13",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20210827_5560885.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "232e80b086d7d894831629b767a402d7da48a2ea323f2cf04000313a493a5fe2",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2021-12-13",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20211126_5644497.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "a1b8e777a3c473fcc7e4db6f0583b67c382c2e06414b8ad2aa4450e2ab4dc217",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2022-03-14",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20220225_5695296.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "4538e6065e39dd3d661f49e4fb561429cc2c976f20e19d80699962ab12819277",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2022-06-13",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20220527_5702708.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "0f3f5ac67b08f4fa82f137165e2dafd3312964f4f2dbaf4fea476c0950195eae",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2022-09-13",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20220826_5707512.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "f3004a95ee85a08eaab08081d9f18ec3d06f01cdaa82c9c167548f3f933aa8a4",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2022-12-12",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20221125_5712726.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "b0f577b71edc1ca7c53ee95b0cc1a524274f1c3d2b891466a643f3fc2b2bced1",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2023-03-13",
+      "parser": "sse_announcement",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20230224_5716888.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "fdb4ae5fe46a08e7a33853380f59026a3b42c6dea7b1e8e10b42f17f98b2355b",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2023-06-12",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10641585/files/c7a1a23a72b845f59474576191097e24.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "ee0770063fbb7589ae5e8837b8a42fe08123172cdfaeaa91b5b505696f5f8828",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20230526_5721790.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "afdb0dd0c0c00d03128c1bebfc238001c4ffdbc1ded6e72610438a413ae4373c",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2023-09-11",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10648727/files/092b60209f8f4bbeace1874986b92f2a.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "bd9f953a62a66975e54c16b3cbe3f45d9bd7a4b98aef393f27d5718d7c3329a1",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20230825_5725641.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "335dd83a9705d09da24c744183adc24af84fc5d5b3cd5f36640a101c15bbed46",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2023-12-11",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10747726/files/dfc2315eda57447d8cda3b99e1108407.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "5b2b30383dc13c090b713755ae5ab4401de00e0dfb356c570d9145ac0f32fdc2",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20231124_5730732.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "ad9915a2f8acf69c170a182ac0b94112e7550cb06b14e658d916bd6fa23caa82",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2024-03-11",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10751192/files/605cca5d1a8a49c0be642d877223a118.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "25b76338b74a9c832e20e365649f6d0390e6945e09f2b0571367ef42e2c59346",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20240223_5735673.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "e334dfaeac84c1642a6323e78b3f631933945e1698cae27e08ddd301e1c6dd58",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2024-06-17",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10758201/files/3bd2e277f9c64485a138f94f7829268d.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "7759dcfd8c931b13ca78e97d91cd629de1824f9dbf51d1ea0079c8a2b37177e7",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20240531_10758201.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "64d7a6f96b044f9b4ded9f8a7c51fe27ea39411d336c1545604d692576793731",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2024-09-18",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10761173/files/624827255bbc46158416427b2f075de2.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "b7cce7b8bb15948f560729872f2b4ac00328772db4a2a310e86e1943dee0a55a",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20240830_10761173.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "90f7a66ea711419dba07b1fb49666af39b3a9da3ae7cf9c8150efd81a9ff1369",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2025-03-17",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10773107/files/075f8cb35fdd4f109fb4c294adc4367d.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "999f0526d128629048064270b027b8a2cbb11a9a47f793eb55fcaae76c974d81",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20250228_10773107.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "b79ffa9dd6039e7c5ff1c94ecd93ebf7f77011f11bb97d7129bfd8809b76405a",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2025-06-16",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10780448/files/5db004c3972942c0ba5f62e9d9ff1a0d.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "23dad6d93c24a285bcb04242c695bc6fe299eff9486e3f01831e0e506d8172ca",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20250530_10780448.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "784e278b08f9164313b6e0ef4f7fcde13f188b1c67a1449e5d8db1bf78abf99b",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2025-09-15",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10790116/files/748cc4ff2ed447949b30c1a0a24cb84d.wps",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "560b43dc8742adf814d571e5ab2b55599e2694e5fed3dc63ee98ac8b42683468",
+        "format": "wps"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20250829_10790116.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "49a165ec32d0c619ccfeb8d24aa408c52af3a96baca826d8d40b4c543d66df1f",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2025-12-15",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10800153/files/50856268f22c40798b1374231ea3fe07.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "f720c15253911f4c9cbd169fa15da55e0aa6ef3b7ce2f549ab5ab6c8e26edacc",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20251128_10800153.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "c7899392c0692076324dcd04c97d2b5e37dcf8b8a6906db85aa619c5622b6900",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2026-03-16",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10810439/files/d3d6a9bffc3a4a1eb4de9598b6cf6c5f.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "bc87f838bc4744aba553a26c15f64d6d6540946f0880aa65fe819cf842d548c1",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20260227_10810439.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "da643efca0c480eade57ff3503a9305d71caae02b6b3c2fe007f034b0a37872f",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2026-06-15",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10820183/files/eaebcb5e5ad343ce87ce9a55f8ba3cce.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "ffe606678a470f216ec410475f627471689a69d685234ff1bbe1173e809e9c67",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20260529_10820183.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "7c484615cb2082e80fc8f514da46b635197220a9298ea6a15959c9931843e322",
+        "format": "shtml"
+      }
+    },
+    {
+      "effective_date": "2026-09-14",
+      "parser": "sse_attachment",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/10830242/files/e7fcf59bdbdc48f088ff1c3481d61440.pdf",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "76480ded9045f56fe4e831e155cb838a00aae9e0b002d3b7adc01949fe67a262",
+        "format": "pdf"
+      },
+      "date_authority": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20260828_10830242.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "ecce273edb823768cbddfd23ff477875fc7344c50c241bdfc9ff76b54b63dec0",
+        "format": "shtml"
+      }
+    }
+  ],
+  "verified_no_change": [
+    {
+      "effective_date": "2024-12-16",
+      "payload": {
+        "url": "https://www.sse.com.cn/market/sseindex/diclosure/c/c_20241129_10765176.shtml",
+        "request_params": {},
+        "source": "exchange",
+        "sha256": "d514d4168364aff3bb8582af344f26511eed58e576b2d333852c1181e37caaad",
+        "format": "shtml"
+      }
+    }
+  ]
+}

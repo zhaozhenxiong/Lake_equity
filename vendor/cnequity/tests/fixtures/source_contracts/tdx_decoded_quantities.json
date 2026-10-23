@@ -1,0 +1,10 @@
+{
+  "source": "tdx_protocol",
+  "contract_version": 1,
+  "cases": [
+    {"wire_value": null, "expected": null},
+    {"wire_value": "not-a-number", "expected": null},
+    {"wire_value": 5.877471754111438e-39, "expected": 0.0},
+    {"wire_value": 67700, "expected": 67700.0}
+  ]
+}

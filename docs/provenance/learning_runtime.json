@@ -1,0 +1,21 @@
+{
+  "sources": [
+    {
+      "package": "pyqlib",
+      "version": "0.9.7",
+      "wheel": "pyqlib-0.9.7-cp312-cp312-win_amd64.whl",
+      "sha256": "dfbee9f0f3005fe805798e2a21c73b198272f1341d5f0d7771e127166faac08e",
+      "url": "https://files.pythonhosted.org/packages/a1/df/c3bb02726eda61b9711e7a3a21e1a1a43102c8d97fcd86d52ba75c1b1a49/pyqlib-0.9.7-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "package": "lightgbm",
+      "version": "4.7.0",
+      "wheel": "lightgbm-4.7.0-py3-none-win_amd64.whl",
+      "sha256": "f42d1e5b32b6f170e606d7c689c6165671da98d7bf37f1addec2623efc8740c9",
+      "url": "https://files.pythonhosted.org/packages/d5/0b/c5c17d862b12ce292f24cd85d40f2f8f8981668fbdbd43fdc2625eccbc79/lightgbm-4.7.0-py3-none-win_amd64.whl"
+    }
+  ],
+  "qlib_usage": "trusted new Parquet/JSON inputs, in-memory model fit, native LightGBM model text; no external pickle/config loading",
+  "runtime_lock": "requirements-qlib.lock",
+  "verification": "scripts/verify_learning_runtime.py"
+}

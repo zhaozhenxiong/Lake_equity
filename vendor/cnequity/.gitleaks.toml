@@ -1,0 +1,7 @@
+# Default gitleaks rules, plus one allowlisted path.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "SHA-256 digests of docs/zh pages (doc_translations.py); a page name like python-api.md trips generic-api-key"
+paths = ['''scripts/dev/i18n/doc_sources\.json''']

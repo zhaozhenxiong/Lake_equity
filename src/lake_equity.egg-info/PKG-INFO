@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: lake-equity
+Version: 0.1.0
+Summary: Versioned financial data and causal structure research workbench
+Requires-Python: <3.13,>=3.12
+Requires-Dist: fastapi==0.142.2
+Requires-Dist: uvicorn==0.54.0
+Requires-Dist: cnequity==0.18.0
+Requires-Dist: duckdb==1.4.3
+Requires-Dist: pandas==3.0.6
+Requires-Dist: numpy==2.5.3
+Requires-Dist: filelock==3.32.2

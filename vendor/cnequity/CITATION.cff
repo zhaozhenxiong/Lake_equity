@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If CNEquity supports your research or data work, please cite this repository."
+type: software
+title: "CNEquity"
+abstract: >-
+  A free, self-hosted financial data infrastructure for China markets, starting
+  with A-shares and providing multi-source ingestion, provenance, adjustment
+  semantics, point-in-time fundamentals, and reproducible Parquet storage.
+version: 0.18.0
+authors:
+  - name: "CNEquity Contributors"
+license: Apache-2.0
+repository-code: "https://github.com/rootSunc/CNEquity"
+url: "https://rootsunc.github.io/CNEquity/"
+keywords:
+  - A-shares
+  - financial data
+  - data lake
+  - quantitative finance
+  - Parquet
+  - point-in-time data

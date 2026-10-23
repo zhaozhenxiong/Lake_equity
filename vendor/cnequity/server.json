@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.rootSunc/cnequity",
+  "title": "CNEquity",
+  "description": "China A-share data lake for AI agents: prices, fundamentals, flows and events, point-in-time.",
+  "websiteUrl": "https://rootsunc.github.io/CNEquity/reference/mcp/",
+  "repository": {
+    "url": "https://github.com/rootSunc/CNEquity",
+    "source": "github"
+  },
+  "version": "0.18.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "cnequity",
+      "version": "0.18.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        },
+        {
+          "type": "named",
+          "name": "--config",
+          "description": "Absolute path to the lake's cnequity.toml. Run `cne init --profile demo` for a one-minute sample lake, or `cne init` for the full market.",
+          "isRequired": true,
+          "format": "filepath",
+          "placeholder": "/abs/path/to/configs/cnequity.toml"
+        }
+      ]
+    }
+  ]
+}

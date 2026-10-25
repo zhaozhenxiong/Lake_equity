@@ -6,6 +6,8 @@ from typing import Literal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from cnequity.i18n import _, use_language
+from cnequity.serve.ops.catalog import OpsError
 
 
 class Body(BaseModel):
@@ -76,8 +78,19 @@ class DataOperations:
         self.gate = MaintenanceGate()
         self.active_jobs = lambda: False
         self.external_busy = busy
-        self.ops = OpsService(config, storage_busy=lambda: busy() or self.gate.closed or bool(self._storage and self._storage.busy))
         self._settings = self._schedule = self._storage = None
+        # The upstream guard deliberately covers all local writes. Its generic
+        # maintenance message is adapted below without weakening that guard.
+        self.ops = OpsService(config, storage_busy=lambda: self.external_busy() or self.maintenance_busy())
+
+    def maintenance_busy(self):
+        return self.gate.closed or bool(self._storage and self._storage.busy)
+
+    def busy_reason(self, message):
+        if (message == _("Storage maintenance is running; wait for it to finish before starting.")
+                and self.external_busy() and not self.maintenance_busy()):
+            return "已有本地数据或研究写入任务正在运行，请在任务与报告中查看进度，等待完成后再执行。"
+        return message
 
     def settings(self):
         if self._settings is None:
@@ -99,7 +112,9 @@ class DataOperations:
         return self._storage
 
     def home(self):
-        value = self.ops.home()
+        with use_language("zh_CN"):
+            value = self.ops.home()
+        value["occupancy"].update(storage_busy=self.maintenance_busy(), local_job_busy=bool(self.external_busy()))
         retired = []
         for item in value["operations"]:
             if item.get("id") not in self.ALLOWED:
@@ -117,7 +132,20 @@ class DataOperations:
             raise ValueError("Operation is outside the LakeEquity whitelist")
         if op == "backfill.run" and params.get("dataset") == "trading_calendar":
             raise ValueError("The controlled trading calendar cannot be rebuilt through source backfill")
-        return self.ops.preview(op, params)
+        with use_language("zh_CN"):
+            result = self.ops.preview(op, params)
+            result["blockers"] = [self.busy_reason(message) for message in result["blockers"]]
+        return result
+
+    def start(self, preview_id, launch_token, acknowledged):
+        with use_language("zh_CN"):
+            try:
+                return self.ops.start(preview_id, launch_token, acknowledged, requested_by="LakeEquity local user")
+            except OpsError as error:
+                message = self.busy_reason(str(error))
+                if message != str(error):
+                    raise OpsError(message) from error
+                raise
 
 
 def create_operations_router(service: DataOperations):
@@ -133,7 +161,7 @@ def create_operations_router(service: DataOperations):
 
     @router.post("/operations/start", status_code=202)
     def start(body: Start):
-        return service.ops.start(body.preview_id, body.launch_token, body.acknowledged, requested_by="LakeEquity local user")
+        return service.start(body.preview_id, body.launch_token, body.acknowledged)
 
     @router.get("/operations/jobs")
     def jobs(limit: int = Query(50, ge=1, le=50)):

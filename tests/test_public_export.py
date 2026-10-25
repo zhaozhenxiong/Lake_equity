@@ -58,6 +58,8 @@ def source_tree(tmp_path, exporter):
         public(f"docs/{name}")
     for name in exporter.PUBLIC_SCRIPTS:
         public(f"scripts/{name}", SCRIPT.read_bytes() if name == "prepare_release.py" else "# synthetic script\n")
+    for name in exporter.PUBLIC_ASSETS:
+        public(f"docs/assets/{name}")
     for name in ("chart_assets.json", "learning_runtime.json"):
         public(f"docs/provenance/{name}", '{"synthetic_public_metadata": true}\n')
     for relative in ("src/lake_equity/__init__.py", "src/lake_equity/data/__init__.py",
@@ -99,7 +101,7 @@ def source_tree(tmp_path, exporter):
     for relative in (
         "var/learning/models/private.npz", "var/logs/private.log", "configs/cnequity.toml",
         "docs/PRIVATE.md", "docs/provenance/state_migration.json", ".env", ".env.local",
-        "private-audit.json", "src/.env", "src/lake_equity/__pycache__/private.pyc",
+        "private-audit.json", "docs/assets/private.png", "src/.env", "src/lake_equity/__pycache__/private.pyc",
         "frontend/node_modules/private.js", "tests/.pytest_cache/private.json",
         "tests/test_fill_lake.py", "tests/test_fill_lake_years.py", "tests/test_repair_calendar.py",
         "packages/khquant_research/app/my_strategy/unlisted-audit.json",
@@ -201,3 +203,52 @@ def test_public_repository_rebuild_needs_no_original_private_manifests(tmp_path,
     rebuilt = rebuilt_exporter.build_release(repository, tmp_path / "rebuilt", "0.1.0")
     assert rebuilt["sha256"] == first["sha256"]
     assert snapshot(Path(rebuilt["repository"])) == snapshot(repository)
+
+
+def declare_patch(root, exporter):
+    relative = "src/cnequity/__init__.py"
+    source = root / "vendor/cnequity" / relative
+    patch = dict(source_manifest="cnequity_source.json", path=relative,
+                 original_sha256=exporter.sha256(source), reason="Synthetic reviewed integration patch")
+    source.write_bytes(b"reviewed local source patch\n")
+    patch["sha256"] = exporter.sha256(source)
+    write(root, "docs/provenance/local_patches.json", json.dumps(dict(schema=1, patches=[patch])))
+    return patch
+
+
+def test_reviewed_patch_preserves_original_manifest_and_public_rebuild(tmp_path, exporter, source_tree):
+    root, _ = source_tree
+    original = (root / "docs/provenance/cnequity_source.json").read_bytes()
+    patch = declare_patch(root, exporter)
+    first = exporter.build_release(root, tmp_path / "patched", "0.1.0")
+    assert (root / "docs/provenance/cnequity_source.json").read_bytes() == original
+    repository = Path(first["repository"])
+    provenance = json.loads((repository / "docs/provenance/sources.json").read_text())
+    assert provenance["local_patches"] == [patch]
+    assert json.loads((repository / "docs/provenance/local_patches.json").read_text())["patches"] == [patch]
+    rebuilt = load_exporter(repository / "scripts/prepare_release.py").build_release(repository, tmp_path / "rebuilt-patched", "0.1.0")
+    assert rebuilt["sha256"] == first["sha256"]
+
+
+@pytest.mark.parametrize("field", ["original_sha256", "sha256", "path"])
+def test_local_patch_must_match_original_and_reviewed_content(tmp_path, exporter, source_tree, field):
+    root, _ = source_tree
+    patch = declare_patch(root, exporter)
+    patch[field] = "unknown.py" if field == "path" else "0" * 64
+    write(root, "docs/provenance/local_patches.json", json.dumps(dict(schema=1, patches=[patch])))
+    output = tmp_path / "rejected-patch"
+    with pytest.raises(ValueError):
+        exporter.build_release(root, output, "0.1.0")
+    assert not output.exists()
+
+
+def test_reviewed_public_docs_replace_host_history_without_copying_it(tmp_path, exporter, source_tree):
+    root, _ = source_tree
+    for name in ("PIPELINE.md", "SHARPE_OPTIMIZATION_PLAN.md"):
+        write(root, f"docs/{name}", PRIVATE)
+        write(root, f"docs/public/{name}", b"Reviewed public usage guide\n")
+    result = exporter.build_release(root, tmp_path / "public-docs", "0.1.0")
+    repository = Path(result["repository"])
+    assert not (repository / "docs/public").exists()
+    for name in ("PIPELINE.md", "SHARPE_OPTIMIZATION_PLAN.md"):
+        assert (repository / "docs" / name).read_bytes() == b"Reviewed public usage guide\n"

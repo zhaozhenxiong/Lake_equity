@@ -8,7 +8,9 @@
 
 绑定开发机冻结证据的历史补采、迁移和日历修复脚本不作为公开安装工具，对应三份维护测试也不分发。当前 Dashboard 中的数据运维接口及其隔离合成测试保留。完整本机维护验收与公开包测试分别记录，不能将前者冒充空安装验收。
 
-`docs/provenance/sources.json` 记录来源版本、输入清单摘要、原文件数量及本次分发数量。历史研究文档和私有迁移证明未分发；公开子集不冒充完整原工作树。CZSC 来源清单和原生 wheel 保持原始字节，补充许可位于独立 `third_party/czsc/`。
+`docs/provenance/sources.json` 记录来源版本、输入清单摘要、原文件数量及本次分发数量。历史研究文档和私有迁移证明未分发；公开子集不冒充完整原工作树。研究依赖中经过审阅的本地修改由 `docs/provenance/local_patches.json` 单独声明原始与当前 SHA-256，核验时两者均须精确匹配；原冻结来源清单、CZSC 来源清单和原生 wheel 保持原始字节。补充许可位于独立 `third_party/czsc/`。
+
+README 使用的四张既有界面截图及来源说明位于 `docs/assets/`，随源码公开分发。截图中的覆盖和结果属于开发期界面快照。流水线与研究说明从 `docs/public/` 的公开版本导出，包内位于 `docs/`；本机原始历史文档不覆盖、不分发。
 
 `release-manifest.json` 记录除自身外每个公开文件的相对路径、大小和 SHA-256。安装与 `lake.bat verify-sources` 核验该清单；它验证包内一致性，不替代对发布者、GitHub 提交及下载渠道的信任。
 
@@ -17,10 +19,10 @@
 使用 Python 3.12，在项目目录运行：
 
 ```powershell
-py -3.12 scripts/prepare_release.py --version 0.1.0 --output var/releases/new-build
+py -3.12 scripts/prepare_release.py --version 0.2.0 --output var/releases/new-build
 ```
 
-目标必须不存在。输出包含 `repo/` 公开目录、`LakeEquity-v0.1.0-source.zip` 和 `SHA256SUMS.txt`。脚本不修改既有运行状态、服务或 Git 历史。ZIP 时间戳和文件顺序固定，相同输入产生相同 ZIP 字节。发布前需再次检查内容和许可，然后用相同产物完成验证和上传。
+目标必须不存在。输出包含 `repo/` 公开目录、`LakeEquity-v0.2.0-source.zip` 和 `SHA256SUMS.txt`。脚本不修改既有运行状态、服务或 Git 历史。ZIP 时间戳和文件顺序固定，相同输入产生相同 ZIP 字节。发布前需再次检查内容和许可，然后用相同产物完成验证和上传。
 
 ## 本版验证范围
 

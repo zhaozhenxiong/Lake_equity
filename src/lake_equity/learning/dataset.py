@@ -17,8 +17,12 @@ from .features import LEGACY_MA, PRICE_VOLUME, trailing_features
 
 
 BAR_COLUMNS = ["open", "high", "low", "close", "volume", "amount"]
+# Audited unadjusted OHLCV sources. ``ths`` was added after the 2026-10-24
+# after-close audit (docs/provenance/ths_daily_bars_qualification.md): final
+# 10-23 bars matched Sina field-for-field on 120/120 sampled symbols. Only
+# after-close THS bars qualify; intraday THS rows must be refreshed, never used.
 RAW_SOURCES = {"sina_unadjusted_v1", "eastmoney_unadjusted_v1", "tencent_star_unadjusted_v1", "fuyao_unadjusted_v1",
-               "tushare", "tushare:daily", "baostock", "tdx_protocol", "eastmoney", "sina"}
+               "tushare", "tushare:daily", "baostock", "tdx_protocol", "eastmoney", "sina", "ths"}
 MARGIN_COLUMNS = ["margin_balance_to_amount20", "margin_buy_to_amount", "margin_balance_change5",
                   "short_balance_to_margin", "short_sell_to_volume"]
 FLOW_COLUMNS = ["flow_main_to_amount", "flow_large_to_amount", "flow_small_to_amount",

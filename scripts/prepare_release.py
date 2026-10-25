@@ -14,8 +14,10 @@ ROOT_FILES = (
     ".gitignore", ".gitattributes", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.md", "pyproject.toml",
     "install.py", "run.py", "lake.bat", "requirements-runtime.lock", "requirements-qlib.lock",
 )
-PUBLIC_DOCS = ("LEARNING.md", "EXECUTION_RULES.md", "MARKET_FEATURES.md", "LEGACY_RETIREMENT.md", "RELEASE.md")
+PUBLIC_DOCS = ("LEARNING.md", "EXECUTION_RULES.md", "MARKET_FEATURES.md", "LEGACY_RETIREMENT.md", "RELEASE.md",
+               "PIPELINE.md", "SHARPE_OPTIMIZATION_PLAN.md", "CHANGELOG.md", "provenance/ths_daily_bars_qualification.md")
 PUBLIC_SCRIPTS = ("prepare_release.py", "verify_learning_runtime.py", "install_chart_assets.py", "preview_market.py")
+PUBLIC_ASSETS = ("overview.png", "structure-analysis.jpg", "market-features.jpg", "data-coverage.png", "README.md")
 PRIVATE_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", "knowledge_base", "knowledge_base_system", "agent_prompts"}
 OMITTED_RESEARCH = ("my_strategy/docs/", "my_strategy/data/", "my_strategy/artifacts/", "my_strategy/kronos_model/")
 PRIVATE_MAINTENANCE_TESTS = {"tests/test_fill_lake.py", "tests/test_fill_lake_years.py", "tests/test_repair_calendar.py"}
@@ -46,9 +48,25 @@ def public_path(relative: Path) -> bool:
 
 def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
     selected: dict[str, tuple[Path, str]] = {}
+    patches = {}
+    patch_manifest = root / "docs/provenance/local_patches.json"
+    if patch_manifest.exists():
+        payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or type(payload.get("schema")) is not int or payload["schema"] != 1 or not isinstance(payload.get("patches"), list):
+            raise ValueError("Invalid local patch manifest")
+        for patch in payload["patches"]:
+            if (not isinstance(patch, dict) or patch.get("source_manifest") not in {"cnequity_source.json", "khquant_source.json"}
+                    or not isinstance(patch.get("path"), str) or not isinstance(patch.get("reason"), str) or not patch["reason"].strip()
+                    or any(not isinstance(patch.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", patch[key]) for key in ("original_sha256", "sha256"))):
+                raise ValueError("Invalid local patch declaration")
+            safe_relative(patch["path"])
+            key = patch["source_manifest"], patch["path"]
+            if key in patches:
+                raise ValueError("Duplicate local patch declaration")
+            patches[key] = patch
 
-    def add(path: Path, expected: str | None = None) -> None:
-        relative = path.relative_to(root)
+    def add(path: Path, expected: str | None = None, public_relative: Path | None = None) -> None:
+        relative = public_relative or path.relative_to(root)
         if not public_path(relative) or relative.as_posix() in PRIVATE_MAINTENANCE_TESTS:
             return
         if path.is_symlink() or any(parent.is_symlink() for parent in path.parents if parent.is_relative_to(root)):
@@ -66,11 +84,17 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
             if path.is_file():
                 add(path)
     for name in PUBLIC_DOCS:
-        add(root / "docs" / name)
+        public_document = root / "docs/public" / name
+        source = public_document if name in {"PIPELINE.md", "SHARPE_OPTIMIZATION_PLAN.md", "MARKET_FEATURES.md", "provenance/ths_daily_bars_qualification.md"} and public_document.is_file() else root / "docs" / name
+        add(source, public_relative=Path("docs") / name)
     for name in PUBLIC_SCRIPTS:
         add(root / "scripts" / name)
+    for name in PUBLIC_ASSETS:
+        add(root / "docs/assets" / name)
     for name in ("chart_assets.json", "learning_runtime.json"):
         add(root / "docs/provenance" / name)
+    if patch_manifest.exists():
+        add(patch_manifest)
 
     public_manifest = root / "release-manifest.json"
     if public_manifest.exists():
@@ -87,6 +111,7 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
         provenance = json.loads((root / "docs/provenance/sources.json").read_text(encoding="utf-8"))
     else:
         sources = []
+        applied_patches = set()
         for name, base in (("cnequity_source.json", root / "vendor/cnequity"),
                            ("khquant_source.json", root / "packages/khquant_research/app")):
             manifest_path = root / "docs/provenance" / name
@@ -94,15 +119,23 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
             included = 0
             for entry in manifest["files"]:
                 relative = safe_relative(entry["path"])
+                key = name, entry["path"]
+                patch = patches.get(key)
+                expected = entry["sha256"]
+                if patch:
+                    if patch["original_sha256"] != expected:
+                        raise ValueError(f"Local patch original SHA mismatch: {name}: {entry['path']}")
+                    expected = patch["sha256"]
+                    applied_patches.add(key)
                 path = base / relative
                 if name == "khquant_source.json" and not path.is_file():
                     path = base.parent / relative
-                if not path.is_file() or sha256(path) != entry["sha256"]:
+                if not path.is_file() or sha256(path) != expected:
                     raise ValueError(f"Frozen input changed: {name}: {entry['path']}")
                 if name == "khquant_source.json" and entry["path"].startswith(OMITTED_RESEARCH):
                     continue
                 before = len(selected)
-                add(path, entry["sha256"])
+                add(path, expected)
                 included += len(selected) - before
             sources.append({
                 "source": name.removesuffix("_source.json"),
@@ -111,8 +144,12 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
                 "original_manifest_sha256": sha256(manifest_path),
                 "original_file_count": len(manifest["files"]), "distributed_file_count": included,
             })
+        if applied_patches != set(patches):
+            raise ValueError("Local patch is not present in its original source manifest")
         provenance = {"schema": 1, "sources": sources,
-                      "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original engine and native wheel bytes are unchanged."}
+                      "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original native wheel bytes are unchanged; any reviewed local source patches are declared separately."}
+        if patches:
+            provenance["local_patches"] = [patches[key] for key in sorted(patches)]
     return selected, provenance
 
 
@@ -155,7 +192,7 @@ def build_release(root: Path, output: Path, version: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default="0.2.0")
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     print(json.dumps(build_release(Path(__file__).resolve().parents[1], arguments.output, arguments.version), indent=2))

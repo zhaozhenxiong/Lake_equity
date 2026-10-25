@@ -1,4 +1,4 @@
-import {api} from './core/api.js';
+import {api,request} from './core/api.js';
 import {escapeHtml,showError} from './core/ui.js';
 
 const pages = [
@@ -13,46 +13,82 @@ const pages = [
   {id:'tasks',title:'任务与报告',icon:'<rect x="5" y="4" width="15" height="18" rx="2"/><path d="M9 4V2h7v2M9 10h7M9 14h7M9 18h4"/>',load:()=>import('./pages/tasks.js')}
 ];
 
-const host=document.getElementById('page-root');
-const nav=document.getElementById('primary-nav');
-nav.innerHTML=pages.map(page=>`<a href="#${page.id}" class="nav-link" data-nav="${page.id}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">${page.icon}</svg><span>${page.title}</span></a>`).join('');
-let controller;
-let cleanup;
-let sequence=0;
-
-function parseRoute(){
-  const [name,query='']=(location.hash.slice(1) || 'overview').split('?');
-  const page=pages.find(item=>item.id===name) || pages[0];
-  return {page,params:new URLSearchParams(query)};
+// 版本新鲜度：启动时记录 /api/v1/health 的 frontend_version，之后只与首次观测值比较；不做自动强刷。
+export function frontendVersion(health){
+  const value=health && typeof health==='object'?(health.frontend_version ?? health.data?.frontend_version ?? ''):'';
+  return typeof value==='string'?value.trim():String(value ?? '').trim();
 }
 
-async function route(){
-  const current=++sequence;
-  controller?.abort();cleanup?.();cleanup=null;
-  controller=new AbortController();
-  const signal=controller.signal;
-  const {page,params}=parseRoute();
-  document.title=`${page.title} · LakeEquity`;
-  document.getElementById('current-page').textContent=page.title;
-  nav.querySelectorAll('[data-nav]').forEach(link=>{if(link.dataset.nav===page.id)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');});
-  host.dataset.page=page.id;
-  host.innerHTML='<div class="loading-state">正在读取页面…</div>';
-  try{
-    const module=await page.load();
-    if(current!==sequence)return;
-    const dispose=await module.mount(host,{signal,params});
-    if(current!==sequence || signal.aborted)dispose?.();else cleanup=dispose;
-  }catch(error){if(current===sequence && error.name!=='AbortError')showError(host,error);}
+// 只在“首次观测版本”与“最新版本”都存在且不同时返回 true；缺失版本一律视为未变化。
+export function versionChanged(firstObserved,latestVersion){
+  const before=String(firstObserved ?? '').trim(),after=String(latestVersion ?? '').trim();
+  return Boolean(before && after && before!==after);
 }
 
-async function connection(){
-  const state=document.getElementById('connection-state');
-  try{await api.overview();state.className='connection online';state.innerHTML='<i></i>本地服务已连接';}
-  catch(error){state.className='connection offline';state.innerHTML='<i></i>服务未连接';state.title=error.message;}
+// 只切换横幅可见性；刷新必须由用户点击触发，绝不自动执行 location.reload()。
+export function showVersionBanner(mount){
+  if(!mount)return false;
+  mount.hidden=false;
+  return true;
 }
 
-function clock(){document.getElementById('workspace-time').textContent=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date());}
-window.addEventListener('hashchange',route);
-document.querySelector('.skip-link').addEventListener('click',event=>{event.preventDefault();document.getElementById('main-content').focus();});
-document.getElementById('refresh-page').addEventListener('click',()=>{route();connection();});
-clock();setInterval(clock,60000);connection();route();
+function boot(){
+  const host=document.getElementById('page-root');
+  const nav=document.getElementById('primary-nav');
+  nav.innerHTML=pages.map(page=>`<a href="#${page.id}" class="nav-link" data-nav="${page.id}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">${page.icon}</svg><span>${page.title}</span></a>`).join('');
+  let controller;
+  let cleanup;
+  let sequence=0;
+  const banner=document.querySelector('[data-version-banner]');
+  let firstVersion='';
+
+  function parseRoute(){
+    const [name,query='']=(location.hash.slice(1) || 'overview').split('?');
+    const page=pages.find(item=>item.id===name) || pages[0];
+    return {page,params:new URLSearchParams(query)};
+  }
+
+  async function route(){
+    const current=++sequence;
+    controller?.abort();cleanup?.();cleanup=null;
+    controller=new AbortController();
+    const signal=controller.signal;
+    const {page,params}=parseRoute();
+    document.title=`${page.title} · LakeEquity`;
+    document.getElementById('current-page').textContent=page.title;
+    nav.querySelectorAll('[data-nav]').forEach(link=>{if(link.dataset.nav===page.id)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');});
+    host.dataset.page=page.id;
+    host.innerHTML='<div class="loading-state">正在读取页面…</div>';
+    try{
+      const module=await page.load();
+      if(current!==sequence)return;
+      const dispose=await module.mount(host,{signal,params});
+      if(current!==sequence || signal.aborted)dispose?.();else cleanup=dispose;
+    }catch(error){if(current===sequence && error.name!=='AbortError')showError(host,error);}
+  }
+
+  async function connection(){
+    const state=document.getElementById('connection-state');
+    try{await api.overview();state.className='connection online';state.innerHTML='<i></i>本地服务已连接';}
+    catch(error){state.className='connection offline';state.innerHTML='<i></i>服务未连接';state.title=error.message;}
+  }
+
+  function clock(){document.getElementById('workspace-time').textContent=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date());}
+
+  async function checkVersion(){
+    try{
+      const version=frontendVersion(await request('/health'));
+      if(!version)return;
+      if(!firstVersion){firstVersion=version;return;}
+      if(versionChanged(firstVersion,version))showVersionBanner(banner);
+    }catch(error){/* 健康检查失败不阻断工作台，也不据此提示刷新。 */}
+  }
+
+  banner?.querySelector('[data-version-reload]')?.addEventListener('click',()=>location.reload());
+  window.addEventListener('hashchange',()=>{route();checkVersion();});
+  document.querySelector('.skip-link').addEventListener('click',event=>{event.preventDefault();document.getElementById('main-content').focus();});
+  document.getElementById('refresh-page').addEventListener('click',()=>{route();connection();checkVersion();});
+  clock();setInterval(clock,60000);connection();route();checkVersion();setInterval(checkVersion,60000);
+}
+
+if(typeof document!=='undefined')boot();

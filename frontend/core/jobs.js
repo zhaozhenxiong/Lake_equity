@@ -1,5 +1,7 @@
 import {api} from './api.js';
-import {activeJob,badge,busy,escapeHtml,jobId,kindLabel,notify,progressValue,routeLink,showError,statusLabel} from './ui.js';
+import {activeJob,badge,busy,errorAdvice,escapeHtml,jobId,kindLabel,notify,progressValue,routeLink,showError,statusLabel} from './ui.js';
+
+export const adviceHtml = (message,{cutoff=''}={}) => { const advice = errorAdvice(message,{cutoff}); return advice ? `<p class="small muted" data-job-advice>建议：${escapeHtml(advice)}</p>` : ''; };
 
 export function cancellationNotice(job) {
   if (!job.cancel_note && typeof job.cancel_effective !== 'boolean') return '';
@@ -9,7 +11,7 @@ export function cancellationNotice(job) {
 
 export function jobSummary(job) {
   const progress=progressValue(job);
-  return `<div class="job-inline-top"><div><strong>${escapeHtml(kindLabel(job.kind))}</strong> ${badge(job.status)}</div><a href="${escapeHtml(routeLink('tasks',{job:jobId(job)}))}">查看任务</a></div>${progress!==null?`<div class="progress"><span style="width:${progress}%"></span></div>`:''}<p>${escapeHtml(job.progress?.stage || job.progress_detail?.stage || job.error || jobId(job))}${progress!==null?` · ${Math.round(progress)}%`:''}</p>${cancellationNotice(job)}${activeJob(job)?`<button class="small-button danger space-top" data-cancel-inline="${escapeHtml(jobId(job))}">取消任务</button>`:''}`;
+  return `<div class="job-inline-top"><div><strong>${escapeHtml(kindLabel(job.kind))}</strong> ${badge(job.status)}</div><a href="${escapeHtml(routeLink('tasks',{job:jobId(job)}))}">查看任务</a></div>${progress!==null?`<div class="progress"><span style="width:${progress}%"></span></div>`:''}<p>${escapeHtml(job.progress?.stage || job.progress?.phase || job.progress_detail?.stage || job.progress_detail?.phase || job.error || jobId(job))}${progress!==null?` · ${Math.round(progress)}%`:''}</p>${adviceHtml(job.error)}${cancellationNotice(job)}${activeJob(job)?`<button class="small-button danger space-top" data-cancel-inline="${escapeHtml(jobId(job))}">取消任务</button>`:''}`;
 }
 
 export function watchJob(host, initial, {signal,onComplete,onError}={}) {
@@ -27,7 +29,7 @@ export function watchJob(host, initial, {signal,onComplete,onError}={}) {
       render();
       if(!activeJob(job) && !completed){completed=true;await onComplete?.(job);}
       else schedule();
-    }catch(error){if(error.name!=='AbortError'){host.innerHTML=`<div class="notice error">${escapeHtml(error.message)}<p>任务可能仍在运行，请到任务页重新读取。</p></div>`;onError?.(error);}}
+    }catch(error){if(error.name!=='AbortError'){host.innerHTML=`<div class="notice error">${escapeHtml(error.message)}<p>任务可能仍在运行，请到任务页重新读取。</p>${adviceHtml(error.message)}</div>`;onError?.(error);}}
   }
   async function handleCancel(event){
     const button=event.target.closest('[data-cancel-inline]');
@@ -54,5 +56,5 @@ export async function submitJob(host, button, kind, params, {signal,onComplete}=
     if(!jobId(job))throw new Error('服务未返回任务标识，无法跟踪计算。请检查任务列表后再提交。');
     notify(`${kindLabel(kind)}已接单`);
     return watchJob(host,job,{signal,onComplete});
-  }catch(error){showError(errorHost,error);throw error;}
+  }catch(error){showError(errorHost,error);const advice=errorAdvice(error?.message);if(advice)notify(advice,'error');throw error;}
 }

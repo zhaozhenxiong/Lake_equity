@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kind": "lake-equity-public-source",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT (LakeEquity original code; third-party terms preserved)",
   "files": [
     {
@@ -15,14 +15,44 @@
       "sha256": "dd66040151d8c1fac4fb5a09d5b52fbd0200bb5a77f550d9b0c602ba6b6764eb"
     },
     {
+      "path": "docs/assets/data-coverage.png",
+      "size": 93174,
+      "sha256": "6b5fe445e2e68d0b5937c81345e58d93daa13f6c418a701612290cbf8001497c"
+    },
+    {
+      "path": "docs/assets/market-features.jpg",
+      "size": 80229,
+      "sha256": "c038e4b55c3e08595fcb60f31df93b861e13bc0718960c5b4e50b8ffd274f869"
+    },
+    {
+      "path": "docs/assets/overview.png",
+      "size": 216255,
+      "sha256": "05cb524ddf1155af19cecf2ef5082cef42e0995c9c0090fd262c6f2b564d5621"
+    },
+    {
+      "path": "docs/assets/README.md",
+      "size": 2815,
+      "sha256": "661d1bc10e7b4df2ec71997b6e24e25e567c3f983bba12b84be577bd3215d9d7"
+    },
+    {
+      "path": "docs/assets/structure-analysis.jpg",
+      "size": 74949,
+      "sha256": "1a35b95932ae582a0acf80b223b70f1a65f4f89f22320d11db064a6a81a61411"
+    },
+    {
+      "path": "docs/CHANGELOG.md",
+      "size": 1205,
+      "sha256": "2ba58feb842cd5a573c351b21ed624596c8b16c0317298c1fe01c44d4dfc24f0"
+    },
+    {
       "path": "docs/EXECUTION_RULES.md",
       "size": 4971,
       "sha256": "db5db544069c79b7790eeef2977e091f69924deabc77bb67fb620fb2b4445cd1"
     },
     {
       "path": "docs/LEARNING.md",
-      "size": 11285,
-      "sha256": "970dc0b005349280dc76b5856debab79ecdf3546459396fc4ab64f23ce1de667"
+      "size": 17886,
+      "sha256": "317e7504fa9d876b2b430d080df4045f6b005afd46506c472b28c255f67f7340"
     },
     {
       "path": "docs/LEGACY_RETIREMENT.md",
@@ -31,8 +61,13 @@
     },
     {
       "path": "docs/MARKET_FEATURES.md",
-      "size": 5228,
-      "sha256": "2c596eb5dec80ae61f1403373ebbc66b65ef22b88ac4795a4b508e2364c4fba7"
+      "size": 5180,
+      "sha256": "03a7e6dd7533f49db7e4c13c875777800b23727eec1471fc77b7f7640b24c005"
+    },
+    {
+      "path": "docs/PIPELINE.md",
+      "size": 2921,
+      "sha256": "bf859e4f94cdc531be6f23c0d6dc3bc5e31fcb04a087be36c2a9771d6bdb7faa"
     },
     {
       "path": "docs/provenance/chart_assets.json",
@@ -45,24 +80,39 @@
       "sha256": "d41f1378a5c0143a60b7c13d4e3e3990ed9faa74b1336b299b86de72faeac601"
     },
     {
+      "path": "docs/provenance/local_patches.json",
+      "size": 580,
+      "sha256": "7025c37f5fb081ba06ebd24839f6de0d67820c6f76b4cf9618eece74c3caaf0e"
+    },
+    {
       "path": "docs/provenance/sources.json",
-      "size": 958,
-      "sha256": "058bc8ffe1dd9a89fddd8e30f4ecfac8dba6c0e6926d56bc1e677efd6f3e6b87"
+      "size": 1583,
+      "sha256": "041691a36512784fdb8f003fb2352b2b632c51ba214ad56d736e0b3c4f3a948a"
+    },
+    {
+      "path": "docs/provenance/ths_daily_bars_qualification.md",
+      "size": 1082,
+      "sha256": "e791f9716205f09b10f6f0e75f441590dfe9172e00590542145670c425072a08"
     },
     {
       "path": "docs/RELEASE.md",
-      "size": 2677,
-      "sha256": "08a8f3a21f63b0c354a94bcfa700b32f9a1fb6b6b3e898d1ee8feedf8784f9df"
+      "size": 3158,
+      "sha256": "813772330d503a9ebc2c913acf1e14f1c26d0f428574ae564d2588513df94b08"
+    },
+    {
+      "path": "docs/SHARPE_OPTIMIZATION_PLAN.md",
+      "size": 2144,
+      "sha256": "d59db90a370a68fc9aacb2ae13f3dbf288124d3194d3ffacd481945122b5b7ed"
     },
     {
       "path": "frontend/app.js",
-      "size": 4080,
-      "sha256": "a2f52202593a43d0a0ff38602de88b8e01aa4de2c79a449606364858657ab6d6"
+      "size": 5715,
+      "sha256": "72d3df1e39ade34c2ee2b43d10f5fd3561581124520030654e1f61f3069cc1af"
     },
     {
       "path": "frontend/core/api.js",
-      "size": 6870,
-      "sha256": "d3d29aac152ec608aca503d96fbcf0f1b839f4f8d2374341098414d5e832269b"
+      "size": 10255,
+      "sha256": "35ee9897d41e3401cac3f5873264fef5747aac07db77423ebdb8dbba4e19a0f8"
     },
     {
       "path": "frontend/core/charts.js",
@@ -76,13 +126,13 @@
     },
     {
       "path": "frontend/core/data-ops.js",
-      "size": 17872,
-      "sha256": "43687bb9a478f58fef4939af869222f201f629ec2803b4c1828ab330e5f8a78a"
+      "size": 19177,
+      "sha256": "d107fe22fa2a2d5fddbc56c70e9be1752b41864bcb95a0cb751a16a37764199d"
     },
     {
       "path": "frontend/core/jobs.js",
-      "size": 3542,
-      "sha256": "749283fa4e71659fedf19f6958a187c845ef2bdba3a8c5a85803572c1a75c127"
+      "size": 3997,
+      "sha256": "c3946db0e2c3ab9e50d2f1a145adf66d2f8b43d5876626a608bc0a5d58253bd3"
     },
     {
       "path": "frontend/core/market-charts.js",
@@ -91,28 +141,38 @@
     },
     {
       "path": "frontend/core/models.js",
-      "size": 3561,
-      "sha256": "bf5ee83046bedd7501ce022654f29d3eb090222fe077d7717aeb6f95e2040a1a"
+      "size": 14579,
+      "sha256": "9b91522dbf99f7f81afa9bb72f1f7c48383f6f9104dc03354e66f85f226337ef"
     },
     {
       "path": "frontend/core/reports.js",
-      "size": 13243,
-      "sha256": "104942dae100089580c7c071bb8c15bf59bdbfe0b3f78f2fccc90688d730b29e"
+      "size": 27469,
+      "sha256": "c3fcac2dbe00261e21289976c2ef3228da279e2860208792147af27d71f82084"
+    },
+    {
+      "path": "frontend/core/study.js",
+      "size": 18170,
+      "sha256": "cd96c423f48745ae8f5c4944a471ac6630ed30bbf9473013d9349bb4d77f1cc0"
+    },
+    {
+      "path": "frontend/core/trading.js",
+      "size": 18797,
+      "sha256": "8ec3b0170edd0d4f2b9072746deee56cc9e2a23db3ee8a72eaa39eed78700a00"
     },
     {
       "path": "frontend/core/ui.js",
-      "size": 9951,
-      "sha256": "1feec69dce7b76591aa189eeb1aad53b836202e364dcb2ebf1c385bd24cdd7d8"
+      "size": 14606,
+      "sha256": "7dc9d6921d645a7e8da46dbf7f2a6ac2cbee0be8bf86a38ea7209de6e3417a36"
     },
     {
       "path": "frontend/index.html",
-      "size": 2731,
-      "sha256": "e35d24e50b6c0cc275a3558a3571c3a89752bdcab90f474a390ea50287b75ffa"
+      "size": 2956,
+      "sha256": "e9f0caf9c5176139ef4d4fe67d020302f57f38fcdcf9fee55c9d5ff16a61c2c4"
     },
     {
       "path": "frontend/package.json",
       "size": 99,
-      "sha256": "332a336a80e4446e1238ef1efc07aef47170988342f35a4338cc0bf372db3217"
+      "sha256": "4ccfb3e44328b4a09e7d1cf65af1618f1ed743537a3ffcac145465053198e229"
     },
     {
       "path": "frontend/pages/analysis.js",
@@ -121,13 +181,13 @@
     },
     {
       "path": "frontend/pages/backtest.js",
-      "size": 8679,
-      "sha256": "e17f41bdb888e884659dd007b26e9be8bcb8fdcb6d1aea5f425aab01cd127571"
+      "size": 31720,
+      "sha256": "d1f431b1a63181d68ef30588b6b6bc5e6796abb7ac370e3af5b2e5030642d89a"
     },
     {
       "path": "frontend/pages/data.js",
-      "size": 14582,
-      "sha256": "772003eab6561d2bc70c389f01b12f4cc36b2e618add824aa60f1fa998813e3a"
+      "size": 20060,
+      "sha256": "8345ed10b5b9f58b0b470103546064c5ba87419dc63d0472b32d2ce7d01cf839"
     },
     {
       "path": "frontend/pages/market.js",
@@ -136,38 +196,38 @@
     },
     {
       "path": "frontend/pages/models.js",
-      "size": 26536,
-      "sha256": "a47ed2b84543297976ad72c28aa0c82ba2c4229e665dcf0bb6fb8214aa2aecc7"
+      "size": 42633,
+      "sha256": "105ec6c08f48f8022c9177488fff0eba67200bb6c67a918cac132160b858792b"
     },
     {
       "path": "frontend/pages/overview.js",
-      "size": 5796,
-      "sha256": "24a0936b2054a44c2290532a6538d9a6d0107fcb11b63562006dd2af48278bea"
+      "size": 17965,
+      "sha256": "105df452824fa62e39ccc5a961fcf927ef8cb9a129d41cdec6d31a644b5a60e3"
     },
     {
       "path": "frontend/pages/scan.js",
-      "size": 8446,
-      "sha256": "a30feeb618b3e2da8be56876d5b938a1b4d19b88584beac7e4b9331b3f3bbb84"
+      "size": 18157,
+      "sha256": "6c6dc68316b114e8b2a4d5867a078b32300da8ccfaf4ad13912b5e251ecd23b2"
     },
     {
       "path": "frontend/pages/tasks.js",
-      "size": 9541,
-      "sha256": "8f3a843d377b936dbd780429f15eda64e99c0fd2dd76c2006c6a0e362de5612b"
+      "size": 16676,
+      "sha256": "e31577ddad03bd98cf82967dd96126a55d83e06fc76abc5c40c7c08aad29eec6"
     },
     {
       "path": "frontend/pages/watchlist.js",
-      "size": 10342,
-      "sha256": "5b49ef9f1a8b3ca3500e5d4c5d0450f82013c83aecf9be8e94f86e61a0715397"
+      "size": 20300,
+      "sha256": "8dc2f45b411620fb5307c2fd19f1e9c4f084e5ec58c3217ae3d92d4d3806b426"
     },
     {
       "path": "frontend/SOURCES.md",
-      "size": 2368,
-      "sha256": "8ed382bc18769c788700490c4b365d434bbf2b7f53fae865f28df7adf3c3fd96"
+      "size": 3485,
+      "sha256": "d020bc5951a9e9a38f2cbbd180090b0f3561936b23c92384149836a1d2d47c45"
     },
     {
       "path": "frontend/styles.css",
-      "size": 29474,
-      "sha256": "46c0a0166ae444c5a052eaed49217ede3aa483bfd235907294bd09c23c9dacf5"
+      "size": 43701,
+      "sha256": "1ce21dd75a18c91d6df6aabfcda9b1fe23aa2f3e274aaac920370d71b554b7c6"
     },
     {
       "path": "frontend/vendor/chart_evidence.js",
@@ -1031,8 +1091,8 @@
     },
     {
       "path": "packages/khquant_research/app/my_strategy/services/kronos_prediction.py",
-      "size": 20851,
-      "sha256": "9bdfd562765c23f30af179374ca00995685e8b3a7e9f7746fb7c83c1b0c65e32"
+      "size": 21502,
+      "sha256": "5f55a5d0e489044bdadd4fdbafb986d59e02c06fca4ed593d7b97675343e1cfb"
     },
     {
       "path": "packages/khquant_research/app/my_strategy/services/kronos_tuning.py",
@@ -4301,13 +4361,13 @@
     },
     {
       "path": "pyproject.toml",
-      "size": 992,
-      "sha256": "6a7d92c23ee5da171bf365a1665fca550a1c45dc2176324ee00c3731d5c67ad8"
+      "size": 1009,
+      "sha256": "106f6b46dcf69793591f87a9d0a10080bec4ada8f1082550ab79ce753959243b"
     },
     {
       "path": "README.md",
-      "size": 5173,
-      "sha256": "145b93b91f6cc6acd2e286a4073e791de94a5c5551766549101f9311ec553703"
+      "size": 8297,
+      "sha256": "0fa88a339b3527a1c58ff0a43395ab8afcd5c631fb37e52cc473150617c955a3"
     },
     {
       "path": "requirements-qlib.lock",
@@ -4331,8 +4391,8 @@
     },
     {
       "path": "scripts/prepare_release.py",
-      "size": 8478,
-      "sha256": "7003a7acf6f4c740f76015c4edc38c4cabfe1a9fefb174d1804e0190ff68f456"
+      "size": 11083,
+      "sha256": "60e489a752e24980b31023420665b8bae6de27c9d43d1c1388a4ffe18655eeca"
     },
     {
       "path": "scripts/preview_market.py",
@@ -4347,7 +4407,7 @@
     {
       "path": "src/lake_equity/__init__.py",
       "size": 22,
-      "sha256": "91447944015cec709e8aa7655f7e9d64e1e4508e7023a57fe3746911c0fc6fed"
+      "sha256": "667d4a15b970b851e20d17510224670c14646cfb6d5a1e388ca6b9cc6da8bf41"
     },
     {
       "path": "src/lake_equity/__main__.py",
@@ -4356,13 +4416,13 @@
     },
     {
       "path": "src/lake_equity/app.py",
-      "size": 21254,
-      "sha256": "84b1ef3438ac592474ec7fc552afd16eff7c5b6d392e7acc92fc4fa1fbb2e777"
+      "size": 35473,
+      "sha256": "8f93f4bc013cf93b74dfd75a1319a634123d3aada84259272657f9b50cda74fc"
     },
     {
       "path": "src/lake_equity/cli.py",
-      "size": 15343,
-      "sha256": "b020f773a0026951d6b44ead56756a985ae43107488745bcd72343bf8b504dc4"
+      "size": 28463,
+      "sha256": "1661534976012f57b1b10aed751c0cdab7c3c3bf87ce20894f0459d5d0ef2dd2"
     },
     {
       "path": "src/lake_equity/data/__init__.py",
@@ -4396,8 +4456,8 @@
     },
     {
       "path": "src/lake_equity/jobs.py",
-      "size": 7628,
-      "sha256": "a7920802732743c177be761640122f17989a3e34be193bd03e7fe34307508877"
+      "size": 8783,
+      "sha256": "d07f2549addc5659dc23644e31da4e4ae0a1b03de768c52d73389586c833ce9e"
     },
     {
       "path": "src/lake_equity/learning/__init__.py",
@@ -4405,9 +4465,29 @@
       "sha256": "7997bb963e680b7b497ff289831737d25943cc0e104a0d2e194c9df243476f20"
     },
     {
+      "path": "src/lake_equity/learning/archive.py",
+      "size": 13635,
+      "sha256": "42f16a8acb2b06eba4025fd870eca4c2f57b4a059afb14515d1775d3f94b034e"
+    },
+    {
+      "path": "src/lake_equity/learning/backtest_plan.py",
+      "size": 14686,
+      "sha256": "fa00628d4c86b206956ffc4f4033168c0f977d5febecc7f844f16f979c40e9fb"
+    },
+    {
       "path": "src/lake_equity/learning/dataset.py",
-      "size": 20716,
-      "sha256": "0c0a04f3a4b5b08cdb891eb3d54ed40ff1ba7665392ca9726b7512181833b9f2"
+      "size": 21031,
+      "sha256": "331173decc4ca385cf9074d106db01a698226c801a315e40ea2aece09c0d612a"
+    },
+    {
+      "path": "src/lake_equity/learning/defaults.py",
+      "size": 6603,
+      "sha256": "39a154496f9a9e2c919cf3eba12a71e72f4012b23872141698cd575f8de42471"
+    },
+    {
+      "path": "src/lake_equity/learning/device.py",
+      "size": 1937,
+      "sha256": "aaa334854e26e3f78bbef0b325d8b8a0252979e28a08b08fd3d875cad4641a64"
     },
     {
       "path": "src/lake_equity/learning/execution.py",
@@ -4420,9 +4500,24 @@
       "sha256": "be45841a74daf441441868da57a0f5a9f838215f7af9d9f2ac994dbd94e15b44"
     },
     {
+      "path": "src/lake_equity/learning/forward.py",
+      "size": 54669,
+      "sha256": "5e6dc814fb8f342a3276cbe41a84f8aef2af5f97345d5860979b6e4ae64fbc70"
+    },
+    {
+      "path": "src/lake_equity/learning/fusion.py",
+      "size": 22674,
+      "sha256": "27778e0f29c47976996d679303d2cf16388a83e25e9b94886049f8928bcef059"
+    },
+    {
+      "path": "src/lake_equity/learning/metrics.py",
+      "size": 2838,
+      "sha256": "f8d7e99f4ed053318af176864fee57d478f3bbd8314832d126cb5617a56bb19b"
+    },
+    {
       "path": "src/lake_equity/learning/models.py",
-      "size": 14208,
-      "sha256": "4debe7206a61a64806f69babc71a1a432f1e65ee09875787d3b9b9d0f390ad88"
+      "size": 14277,
+      "sha256": "aac39a03213424c156de66ee2cf0278e4febe4af2bc0ca46b9300f12976f29fe"
     },
     {
       "path": "src/lake_equity/learning/neural.py",
@@ -4441,13 +4536,23 @@
     },
     {
       "path": "src/lake_equity/learning/portfolio.py",
-      "size": 21722,
-      "sha256": "5e46ccdd0495bd5b494bacd91443af941b5c14aa7100e6cd807e2859ee626e20"
+      "size": 25937,
+      "sha256": "6562b85cc3a45248f5f7a41d46a5a06eaaab9f313282370b9f450b90ba0b0206"
+    },
+    {
+      "path": "src/lake_equity/learning/preview.py",
+      "size": 15449,
+      "sha256": "861003474a5f386b73c17d3ec76ec9da6162e08354f7d688d9a468ff2cfa2a53"
     },
     {
       "path": "src/lake_equity/learning/qlib_worker.py",
       "size": 4231,
       "sha256": "2eb3c381da54b6b5c041b6909bc6ff895d7d600602af57be2ecf64e3439005f5"
+    },
+    {
+      "path": "src/lake_equity/learning/quarantine.py",
+      "size": 7874,
+      "sha256": "231b25abf836f7d210cecae3b631cd7a006de1654682f5f9e9ea5a20a2384055"
     },
     {
       "path": "src/lake_equity/learning/refit.py",
@@ -4456,8 +4561,13 @@
     },
     {
       "path": "src/lake_equity/learning/registry.py",
-      "size": 10613,
-      "sha256": "587b2146256f9c5030b43b9a008de75cf4e7a91563d572feb004787d097eb8b0"
+      "size": 11787,
+      "sha256": "f3ed1fdbaf4388a7fec85b6035468b3ed523f658195fb391d4d137992cd509b1"
+    },
+    {
+      "path": "src/lake_equity/learning/releases.py",
+      "size": 13921,
+      "sha256": "6a0817dd51573a9c2f722956810255cb1b19b16ba82328c390073b624d1f4bc2"
     },
     {
       "path": "src/lake_equity/learning/service.py",
@@ -4465,9 +4575,29 @@
       "sha256": "13f9375d831d0e478622fb115612e03773fecd4182521e16ddfeceba2e8934cf"
     },
     {
+      "path": "src/lake_equity/learning/study.py",
+      "size": 63985,
+      "sha256": "70fe5d490c19f8e4113fb7793e3556624eebbccaf0c7cc15c775c85990cb9161"
+    },
+    {
+      "path": "src/lake_equity/learning/trading.py",
+      "size": 31542,
+      "sha256": "d9269a1a0cc06d57b0fd3fa630d4396457db58f3bcd8decf63cf219cb7d3b61e"
+    },
+    {
+      "path": "src/lake_equity/learning/universe.py",
+      "size": 25211,
+      "sha256": "18b27f6831e8462f07ac9177af0e6311f5cb0bcfc17c84b8c2a3d52b6c459c02"
+    },
+    {
+      "path": "src/lake_equity/learning/verification.py",
+      "size": 10049,
+      "sha256": "3287c00a4e592ca01640ff788b69970d33f85590cf628a407ecd0e4a46fe4783"
+    },
+    {
       "path": "src/lake_equity/learning/workflow.py",
-      "size": 23949,
-      "sha256": "a916114bf9633db3bebc21c1a9f11ffb2f89e33426d7ccf4d27f904dae631c98"
+      "size": 49264,
+      "sha256": "27adc49bded2e56fb296098b3d76d9f51778f83d86e0880c80216a8bc58a8250"
     },
     {
       "path": "src/lake_equity/market/__init__.py",
@@ -4501,8 +4631,18 @@
     },
     {
       "path": "src/lake_equity/operations.py",
-      "size": 7478,
-      "sha256": "df9dac09c0142272f7ff5080fcdfbacf903de260696b7b544e889137476d7aef"
+      "size": 8901,
+      "sha256": "97dcd351dfecbc97c54157feacd6ad92c55a656d326985de4756eafd5c9801bb"
+    },
+    {
+      "path": "src/lake_equity/pipeline.py",
+      "size": 71020,
+      "sha256": "c4f3bac201e41336c4076e033e0dc73fb523931b002a62b3a1400a05b6294533"
+    },
+    {
+      "path": "src/lake_equity/report_views.py",
+      "size": 1964,
+      "sha256": "867b6cc02a2e734f8f5afd0c0b657ea13f6be6ac9234006154d1435bbf949ce7"
     },
     {
       "path": "src/lake_equity/research/__init__.py",
@@ -4516,8 +4656,8 @@
     },
     {
       "path": "src/lake_equity/settings.py",
-      "size": 2272,
-      "sha256": "5b4d71d024f38e5f9c28e9b625581acc5ac78e23007f755dd08f255cb607d23a"
+      "size": 2470,
+      "sha256": "2ee3d5a114ae46f3effd71aa0cb7d38c5f963148f979fa84b2136727f0f5cc44"
     },
     {
       "path": "src/lake_equity/storage_protection.py",
@@ -4571,8 +4711,23 @@
     },
     {
       "path": "tests/test_frontend_contract.py",
-      "size": 21055,
-      "sha256": "f784690637d8b07045d1d92af7d8b03f10d4bb9a85487b5edf2ca0f640739e58"
+      "size": 38357,
+      "sha256": "306c2d80d4662e46d43f336d0c7f8df76fa9f5a15d5aab4464719186eff1b183"
+    },
+    {
+      "path": "tests/test_frontend_optimization_pages.py",
+      "size": 18397,
+      "sha256": "97217f0aaee0402749139f4866b041fd75db7a8980cf1099e9ec0b6aebcddc68"
+    },
+    {
+      "path": "tests/test_frontend_optimization_shell.py",
+      "size": 15134,
+      "sha256": "2b981657798789ec26ac0c9328f573dacca21c1a67779589dd00167ad351fb2b"
+    },
+    {
+      "path": "tests/test_historical_parent_contract.py",
+      "size": 8002,
+      "sha256": "9e4e750fd355fd00abc54b418c7a482b526c8d437cdbd5325621dc0e25eec138"
     },
     {
       "path": "tests/test_input_contract.py",
@@ -4583,6 +4738,11 @@
       "path": "tests/test_instruments_fallback.py",
       "size": 23900,
       "sha256": "981c52f127d0078cf1c11d3bfa91840b1dc158a40140566dbbf9c18f1d8e4d35"
+    },
+    {
+      "path": "tests/test_job_failures.py",
+      "size": 1871,
+      "sha256": "5bda658c1e598c2ae3cd1be38a0aa8a7f134fab2b2a649ecd66bc66a9f290a69"
     },
     {
       "path": "tests/test_jobs.py",
@@ -4596,18 +4756,33 @@
     },
     {
       "path": "tests/test_learning_api.py",
-      "size": 8498,
-      "sha256": "ce2c961ed571e196bf2f79f8f61ee15f55552b9a9f34e335d4650e1f771d8e0b"
+      "size": 10358,
+      "sha256": "43b9bed78d43766ee2333d910ccb2afda69e34dff4793ec9a4391ec3ed94d501"
+    },
+    {
+      "path": "tests/test_learning_backtest_plan.py",
+      "size": 5497,
+      "sha256": "4f2d8fdc6b16762f3d62067b59b1bc4702964ca929d2bdade76e0e5e7cbf1f7b"
     },
     {
       "path": "tests/test_learning_dataset.py",
-      "size": 8937,
-      "sha256": "c62dccdb94090cf5227119a5c1deef1e78c8185a6bcb3aea0c6feb54d90c8bf6"
+      "size": 9164,
+      "sha256": "c37413257fbe4cf6c5760e56b5b71bb258d295f7c837c6dea1b984c183752105"
     },
     {
       "path": "tests/test_learning_execution.py",
       "size": 7714,
       "sha256": "b6b496b983369ed18283fe121341680ff3a98f3fbe8103874a61f7695ca29791"
+    },
+    {
+      "path": "tests/test_learning_forward.py",
+      "size": 12798,
+      "sha256": "dad475acc5576bec2548bd0f1b78d45f12f282f22c61ab8962a941dca958bfe3"
+    },
+    {
+      "path": "tests/test_learning_fusion_trading.py",
+      "size": 19178,
+      "sha256": "147c94f885bf0d55271d61e7e8a7b0229462cb03b420b5994da7171f5600c9a3"
     },
     {
       "path": "tests/test_learning_mlp.py",
@@ -4616,13 +4791,18 @@
     },
     {
       "path": "tests/test_learning_portfolio.py",
-      "size": 9266,
-      "sha256": "a339fd75348dfeb558024ee4ae17ee293a32f3760f2a42897e2a41bec56e058a"
+      "size": 11259,
+      "sha256": "dd2013c62029f989bfc96d957207d6bc5e9c148dc1d7bf68417c60bc9b4ab791"
     },
     {
       "path": "tests/test_learning_publication.py",
       "size": 4878,
       "sha256": "9c8197b20aea0b479008be1a96ccca81f92ae2d42b5d97a3900bb2efe1c5af48"
+    },
+    {
+      "path": "tests/test_learning_quarantine.py",
+      "size": 5754,
+      "sha256": "bcee236ed0f29228f4f2759a15d97214ba55ba5ffa7ca7a5c1043cfdc2fd8176"
     },
     {
       "path": "tests/test_learning_refit.py",
@@ -4635,9 +4815,19 @@
       "sha256": "d1e00268f7ce336141c5dec853a80d209ab6508824754f1bdb43ac462ac40636"
     },
     {
+      "path": "tests/test_learning_study.py",
+      "size": 15141,
+      "sha256": "20d6f1c391d90414d906ad0ea7b6102b45d8eed209f77a29c3567a7834ab7d88"
+    },
+    {
+      "path": "tests/test_learning_universe.py",
+      "size": 10253,
+      "sha256": "a0a8d46f23b6513343e1a306650c839f6e93b61c2e06ec321ac3227f486e148a"
+    },
+    {
       "path": "tests/test_learning_workflow.py",
-      "size": 7691,
-      "sha256": "23fd5dbe596d7a22f465eef20eb3cc68a5ae7ed335502f6148475633dba19dbb"
+      "size": 23770,
+      "sha256": "45d4f557d4e4a54e15b1ff23b934bcc2a67706c81c228c6f65f344a719da9164"
     },
     {
       "path": "tests/test_legacy_migration.py",
@@ -4675,19 +4865,54 @@
       "sha256": "18a4b011d1f878c938c35d6e79e3ad720c4cd14eda0091c377e1d5490d0b01e4"
     },
     {
+      "path": "tests/test_model_archive.py",
+      "size": 10686,
+      "sha256": "ecdbfcd9289b99265fb881e03cb865a6f25e860954d070165e00658be37da446"
+    },
+    {
+      "path": "tests/test_operations_occupancy.py",
+      "size": 4644,
+      "sha256": "4e8381ad464ca2f16e942db6db40f6983e509ed2fd987037902803fd4ef1c138"
+    },
+    {
+      "path": "tests/test_optimization_api.py",
+      "size": 3345,
+      "sha256": "077c2afc76428ea72c4e88a38d31df9c41ac17236d623bd0a19fdf87ee4ad1dd"
+    },
+    {
+      "path": "tests/test_pipeline.py",
+      "size": 23131,
+      "sha256": "e4382c27182a739e3707ba8ff669b1538b391c129e6d043d9fa80d122e8961ad"
+    },
+    {
       "path": "tests/test_public_export.py",
-      "size": 9331,
-      "sha256": "b6981bf2d9256282e7a8d5e5f7b44a92be2abd723abc9b5bf1596561db32d534"
+      "size": 12061,
+      "sha256": "3154da34e626f6693922005e553b5f67ab74f6a23bdbea9de9182de48625b48d"
     },
     {
       "path": "tests/test_release_verification.py",
-      "size": 6065,
-      "sha256": "3b956f71d35244da0f4725c3e0e9c013f6f8869c4f12bc8ad6603088cf44837b"
+      "size": 8007,
+      "sha256": "579758f0f9b9e7da9a6ff969172f2b258ac6bf6cc02de93530c9809cf83028f7"
+    },
+    {
+      "path": "tests/test_report_views.py",
+      "size": 4189,
+      "sha256": "5f21c18abefb1be879df9e9ac21b9ee141a4e7791c631cc0e5eb3ebd881ed133"
     },
     {
       "path": "tests/test_research_bridge.py",
       "size": 12318,
       "sha256": "a3af90acf47e4b57461c552c709c181fa09071bc8fa19cd11c38d2d25d8a57a5"
+    },
+    {
+      "path": "tests/test_sharpe_metrics.py",
+      "size": 1270,
+      "sha256": "f62eafc83320cb7a7b5e325024214f7ee26304627a611b345b7b2395157bf463"
+    },
+    {
+      "path": "tests/test_strategy_releases.py",
+      "size": 4025,
+      "sha256": "d9cd0f711fa1c06adbc8670b52456967ba031c1e1e90e66206bc41cd90e182fa"
     },
     {
       "path": "third_party/czsc/crates/adler2-2.0.1/LICENSE-0BSD",
@@ -9216,8 +9441,8 @@
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
-      "size": 3500,
-      "sha256": "4f29b3ecaf19921f2657da17c8b6a634bb08a17a7d7b605e21ad998f6aa6324c"
+      "size": 3796,
+      "sha256": "db3d5bc3013d80216181437556b00269fec7898604ae38afc6c758aec8888348"
     },
     {
       "path": "vendor/cnequity/.github/CODEOWNERS",

@@ -178,6 +178,12 @@ def test_migrated_verified_fuyao_source_is_accepted():
     assert 'fuyao_unadjusted_v1' in VERIFIED_SOURCES & RAW_SOURCES
 
 
+def test_ths_after_close_daily_bars_source_is_accepted():
+    # Qualification evidence: docs/provenance/ths_daily_bars_qualification.md
+    from lake_equity.learning.dataset import RAW_SOURCES
+    assert 'ths' in RAW_SOURCES
+
+
 def test_ma_formulas_match_existing_twenty_feature_baseline(lake):
     from my_strategy.services.czsc_market_features import _trailing_features
     _, _, _, bars = lake

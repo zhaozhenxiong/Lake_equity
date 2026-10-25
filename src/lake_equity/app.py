@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, closing
 from datetime import datetime
+import hashlib
 import hmac
 import json
 import os
@@ -23,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from filelock import FileLock, Timeout
 
 from lake_equity.jobs import JobCancelled, JobManager
+from lake_equity.report_views import learning_dashboard_view
 from lake_equity.settings import Settings
 
 
@@ -35,6 +37,16 @@ class JobRequest(BaseModel):
 class WatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     symbol: str
+
+
+def _frontend_version(root: Path) -> str:
+    """Content-free build identity for the static workbench modules."""
+    files = sorted(
+        (path.relative_to(root).as_posix(), path.stat().st_size, path.stat().st_mtime_ns)
+        for path in (root / "frontend").rglob("*")
+        if path.is_file() and path.suffix in {".js", ".css", ".html"} and "vendor" not in path.parts
+    )
+    return hashlib.sha256("\n".join(f"{name}|{size}|{stamp}" for name, size, stamp in files).encode()).hexdigest()[:16]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -68,6 +80,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def workflow():
         from lake_equity.learning.workflow import LearningWorkflow
         return LearningWorkflow(settings.root)
+
+    def releases():
+        from lake_equity.learning.releases import ReleaseRegistry
+        return ReleaseRegistry(settings.root)
+
+    def pipeline():
+        from lake_equity.pipeline import PipelineService
+        return PipelineService(settings.root, lake, operation_lock=operation_lock)
+
+    def studies():
+        from lake_equity.learning.study import StudyService
+        return StudyService(settings.root)
+
+    def fusion():
+        from lake_equity.learning.fusion import FusionService
+        return FusionService(settings.root)
+
+    def trading():
+        from lake_equity.learning.trading import TradingService
+        return TradingService(settings.root)
+
+    def forward():
+        from lake_equity.learning.forward import ForwardLedger
+        return ForwardLedger(settings.root)
 
     def with_input(params):
         requested = dict(params)
@@ -138,13 +174,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise JobCancelled("任务已取消")
             return False
 
+        if kind == 'research_study':
+            check_cancel()
+            spec = dict(params)
+            publish, activate = spec.pop('publish', True), spec.pop('activate', True)
+            result = studies().run(spec, progress=progress, check_cancel=check_cancel)
+            if publish and result.get('best_model_id') and result.get('status') in {'completed', 'complete'}:
+                release = releases().from_study(result)
+                if activate:
+                    releases().activate(release['release_id'], reason='Completed ten-year research selection; provisional default, including negative outcomes')
+                result = {**result, 'release_id': release['release_id'], 'research_active': bool(activate)}
+            return learning_dashboard_view(result)
+        if kind == 'fusion_scan':
+            return fusion().run(params, progress=progress, check_cancel=check_cancel)
+        if kind == 'trade_plan':
+            check_cancel()
+            return trading().build_plan(params)
+
         if kind == "factor_training":
             check_cancel()
-            return learning().run(params, progress=progress, check_cancel=check_cancel)
+            return learning_dashboard_view(learning().run(params, progress=progress, check_cancel=check_cancel))
         if kind == "model_refit":
             from lake_equity.learning.refit import refit_model
             check_cancel()
-            return refit_model(settings.root, params, progress=progress, check_cancel=check_cancel)
+            return learning_dashboard_view(refit_model(settings.root, params, progress=progress, check_cancel=check_cancel))
+        if kind == "pipeline":
+            check_cancel()
+            return pipeline().run(params, progress=progress, check_cancel=check_cancel)
         if kind in {"scan", "backtest"}:
             check_cancel()
             return getattr(workflow(), kind)(params, progress=progress, check_cancel=check_cancel)
@@ -193,6 +249,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not operations.gate.enter():
             raise ValueError("Storage maintenance is active; submit after it finishes")
         try:
+            if kind in {'research_study', 'factor_training', 'model_refit', 'fusion_scan', 'prediction', 'scan', 'backtest', 'pipeline'}:
+                path = settings.root / 'var/learning/compute.lock'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                lease = FileLock(str(path))
+                last_wait_notice = 0.
+                while True:
+                    if cancelled():
+                        raise JobCancelled('等待研究计算资源时已取消')
+                    try:
+                        lease.acquire(timeout=.2)
+                        break
+                    except Timeout:
+                        if time.monotonic() - last_wait_notice > 5:
+                            progress({'phase': 'waiting_compute_lease', 'message': '已有训练或预测计算，等待其释放资源'})
+                            last_wait_notice = time.monotonic()
+                try:
+                    return dispatch_unlocked(kind, params, progress, cancelled)
+                finally:
+                    lease.release()
             return dispatch_unlocked(kind, params, progress, cancelled)
         finally:
             operations.gate.leave()
@@ -215,7 +290,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await asyncio.to_thread(jobs.close)
         await asyncio.to_thread(research.close)
 
-    app = FastAPI(title="LakeEquity 研究工作台", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="LakeEquity 研究工作台", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.jobs = jobs
     from lake_equity.market.routes import create_market_router
@@ -247,6 +322,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             if gated:
                 operations.gate.leave()
+        if request.url.path.startswith("/assets"):
+            response.headers["Cache-Control"] = "no-cache"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
@@ -280,15 +357,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "version": "0.1.0", "project_root": str(settings.root)}
+        return {"status": "ok", "version": "0.2.0", "project_root": str(settings.root),
+                "frontend_version": _frontend_version(settings.root)}
 
     @app.get("/api/v1/overview")
     def overview():
         from my_strategy.adapters.czsc_adapter import data_status
         data = data_status(db_path=settings.raw_db) if settings.raw_db.is_file() else {"available": False}
         listed = jobs.list()
-        return {"data": data, "lake": lake.catalog(), "research": {"available": settings.raw_db.is_file(), "methods": research.methods(), "models": registry().list_models()},
-                "jobs": {"active": sum(row["status"] in {"queued", "running", "cancelling"} for row in listed), "total": len(listed)}}
+        default_method = None
+        try:
+            release = releases().active()
+        except (ValueError, KeyError, OSError):
+            release = None
+        if release:
+            default_method = {key: release.get(key) for key in
+                              ('release_id', 'name', 'model_id', 'information_cutoff', 'protocol', 'risk', 'qualification')}
+        last_pipeline = None
+        try:
+            last_pipeline = pipeline().latest()
+        except (ValueError, KeyError, OSError, AttributeError):
+            last_pipeline = None
+        pipeline_summary = None
+        coverage_summary = None
+        if last_pipeline:
+            pipeline_summary = {key: last_pipeline.get(key) for key in
+                                ('pipeline_id', 'status', 'target_date', 'finished_at', 'exit_code')}
+            scan = last_pipeline.get('scan') or {}
+            pipeline_summary['scored'] = scan.get('scored')
+            pipeline_summary['scan'] = scan
+            coverage = last_pipeline.get('coverage') or {}
+            coverage_summary = {key: coverage.get(key) for key in
+                                ('target_date', 'verdict', 'can_scan', 'counts')}
+        return {"data": data, "lake": lake.catalog(),
+                "research": {"available": settings.raw_db.is_file(), "methods": research.methods(), "models": registry().list_models()},
+                "jobs": {"active": sum(row["status"] in {"queued", "running", "cancelling"} for row in listed), "total": len(listed)},
+                "default_method": default_method, "pipeline": pipeline_summary, "coverage": coverage_summary}
 
     @app.get("/api/v1/catalog")
     def catalog():
@@ -297,6 +401,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/quality")
     def quality():
         return lake.quality()
+
+    @app.get("/api/v1/pipeline/latest")
+    def pipeline_latest():
+        return {"pipeline": pipeline().latest()}
+
+    @app.get("/api/v1/pipeline/preview")
+    def pipeline_preview(end: str | None = None, packs: Literal['core', 'extended', 'full'] = 'full',
+                         refit: Literal['auto', 'never', 'now'] = 'auto', top_k: int = Query(20, ge=1, le=100)):
+        params = {"packs": packs, "refit": refit, "top_k": top_k}
+        if end:
+            params["end"] = end
+        return pipeline().preview(params)
+
+    @app.get("/api/v1/pipeline/{pipeline_id}")
+    def pipeline_read(pipeline_id: str):
+        return pipeline().read(pipeline_id)
+
+    @app.get("/api/v1/coverage")
+    def coverage(date: str | None = None):
+        params = {} if not date else {"end": date}
+        return pipeline().preview(params)["coverage"]
 
     @app.get("/api/v1/datasets/{dataset}/read")
     def read_dataset(dataset: str, symbol: str | None = None, start: str | None = None, end: str | None = None,
@@ -352,9 +477,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def submit_job(body: JobRequest):
         if body.kind == "training":
             raise ValueError("旧20维训练入口已退役，请使用统一 factor_training 与显式特征配置")
-        if body.kind not in {"backtest", "scan", "prediction", "factor_training", "model_refit", "update", "import", "materialize", "analysis", "board_features"}:
+        if body.kind not in {"backtest", "scan", "prediction", "factor_training", "model_refit", "update", "import", "materialize", "analysis", "board_features", 'research_study', 'fusion_scan', 'trade_plan', 'pipeline'}:
             raise ValueError("不支持的任务类型")
-        return jobs.submit(body.kind, body.params)
+        params = dict(body.params)
+        if body.kind in {'scan', 'backtest', 'fusion_scan'} and (params.get('release_id') or
+                not any(params.get(key) for key in ['model_id', 'series_id', 'study_id'])):
+            release = releases().resolve(params)
+            if release:
+                params['release_id'] = release['release_id']
+                if params.get('mode') == 'rolling':
+                    params.setdefault('series_id', release['series_id'])
+                elif params.get('mode') not in {'historical', 'watchlist_replay'}:
+                    params.setdefault('model_id', release['model_id'])
+        return jobs.submit(body.kind, params)
 
     @app.get("/api/v1/jobs/{identity}")
     def get_job(identity: str):
@@ -393,21 +528,165 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if kind in {None, "factor_training", "training"}:
             items += [{**row, "kind": "factor_training"} for row in learning().list_runs().get("runs", [])]
         items += workflow().list_runs(kind=kind, limit=limit).get("reports", [])
+        if kind in {None, 'research_study'}:
+            items += [{**row, 'run_id': row.get('run_id', row['study_id']), 'kind': 'research_study',
+                       'title': '十年模型研究'} for row in studies().list_runs().get('studies', [])]
+        if kind in {None, 'fusion_scan'}:
+            items += fusion().list_runs(limit=limit).get('reports', [])
         unique = {row.get("run_id", row.get("id")): row for row in items}
         return {"reports": sorted(unique.values(), key=chronological, reverse=True)[:limit]}
 
     @app.get("/api/v1/reports/{identity}")
-    def report(identity: str):
+    def report(identity: str, view: Literal['full', 'dashboard'] = 'full'):
+        if identity.startswith('study-'):
+            result = studies().read_run(identity)
+            return learning_dashboard_view(result) if view == 'dashboard' else result
+        if identity.startswith('fusion-'):
+            return fusion().read_run(identity)
+        if identity.startswith('plan-'):
+            return trading().read_plan(identity)
         if identity.startswith("learn-"):
-            return learning().read_run(identity)
-        if identity.startswith(("scan-", "backtest-")):
+            result = learning().read_run(identity)
+            return learning_dashboard_view(result) if view == 'dashboard' else result
+        if identity.startswith(("scan-", "backtest-", "bplan-")):
             return workflow().read_run(identity)
         return research.read_report(identity)
 
     @app.get("/api/v1/models")
-    def models():
+    def models(include_archived: bool = False):
         from my_strategy.services.kronos_assets import asset_status
-        return {**registry().list_models(), "assets": asset_status()}
+        service = registry()
+        try:
+            listed = service.list_models(include_archived=include_archived)
+        except TypeError:
+            listed = service.list_models()
+        return {**listed, "assets": asset_status(), 'research_active': releases().active()}
+
+    @app.post('/api/v1/models/archive/preview')
+    def model_archive_preview(spec: dict | None = None):
+        from lake_equity.learning.archive import plan
+        body = spec or {}
+        if set(body) - {'keep_recent'}:
+            raise ValueError('Unknown archive preview parameters')
+        keep_recent = body.get('keep_recent', 2)
+        if isinstance(keep_recent, bool) or not isinstance(keep_recent, int) or not 0 <= keep_recent <= 50:
+            raise ValueError('keep_recent must be an integer in [0,50]')
+        return {'plan': plan(settings.root, keep_recent=keep_recent)}
+
+    @app.post('/api/v1/models/archive/confirm')
+    def model_archive_confirm(spec: dict):
+        from lake_equity.learning.archive import execute
+        if set(spec) - {'plan_id', 'model_ids'}:
+            raise ValueError('Unknown archive confirmation parameters')
+        plan_id = spec.get('plan_id')
+        if not isinstance(plan_id, str) or not plan_id:
+            raise ValueError('plan_id is required; preview first')
+        return execute(settings.root, plan_id, spec.get('model_ids'))
+
+    @app.get('/api/v1/strategy/releases')
+    def strategy_releases():
+        return releases().list()
+
+    @app.get('/api/v1/strategy/active')
+    def active_strategy():
+        return {'release': releases().active()}
+
+    @app.get('/api/v1/strategy/releases/{release_id}')
+    def strategy_release(release_id: str):
+        return releases().read(release_id)
+
+    @app.post('/api/v1/strategy/releases', status_code=201)
+    def create_strategy_release(spec: dict):
+        return releases().create(spec)
+
+    @app.post('/api/v1/strategy/releases/{release_id}/activate')
+    def activate_strategy_release(release_id: str, spec: dict):
+        if set(spec) - {'reason', 'expected_current'}:
+            raise ValueError('Unknown activation parameters')
+        return releases().activate(release_id, **spec)
+
+    @app.post('/api/v1/strategy/from-study/{study_id}', status_code=201)
+    def release_study(study_id: str):
+        return releases().from_study(studies().read_run(study_id))
+
+    @app.get('/api/v1/learning/studies')
+    def research_studies():
+        return studies().list_runs()
+
+    @app.get('/api/v1/learning/studies/{study_id}')
+    def research_study(study_id: str, view: Literal['full', 'dashboard'] = 'full'):
+        result = studies().read_run(study_id)
+        return learning_dashboard_view(result) if view == 'dashboard' else result
+
+    @app.post('/api/v1/learning/studies/preflight')
+    def research_study_preflight(spec: dict):
+        return studies().preflight(spec)
+
+    @app.get('/api/v1/fusion/runs')
+    def fusion_runs(limit: int = Query(100, ge=1, le=1000)):
+        return fusion().list_runs(limit=limit)
+
+    @app.get('/api/v1/fusion/runs/{run_id}')
+    def fusion_run(run_id: str):
+        return fusion().read_run(run_id)
+
+    # Forward research is append-only and read-only through HTTP; recording and
+    # verification are explicit CLI/job actions so GET can never change state.
+    @app.get('/api/v1/forward/days')
+    def forward_days(limit: int = Query(100, ge=1, le=1000)):
+        return forward().list_days(limit=limit)
+
+    @app.get('/api/v1/forward/metrics')
+    def forward_metrics(limit: int = Query(60, ge=1, le=500)):
+        return forward().metrics({'limit': limit})
+
+    @app.get('/api/v1/forward/summary')
+    def forward_summary(limit: int = Query(20, ge=1, le=500)):
+        return forward().summary({'limit': limit})
+
+    @app.get('/api/v1/forward/evaluations')
+    def forward_evaluations(day: str | None = None):
+        return forward().evaluations(day)
+
+    @app.get('/api/v1/forward/days/{day}')
+    def forward_day(day: str):
+        return forward().read(day)
+
+    @app.get('/api/v1/trading/accounts')
+    def trading_accounts():
+        return trading().list_accounts()
+
+    @app.get('/api/v1/trading/template')
+    def trading_template():
+        return trading().import_template()
+
+    @app.get('/api/v1/trading/plans')
+    def trading_plans():
+        return trading().list_plans()
+
+    @app.post('/api/v1/trading/accounts', status_code=201)
+    def create_trading_account(spec: dict):
+        return trading().create_account(spec)
+
+    @app.get('/api/v1/trading/accounts/{account_id}')
+    def trading_account(account_id: str):
+        return trading().read_account(account_id)
+
+    @app.post('/api/v1/trading/accounts/{account_id}/snapshots', status_code=201)
+    def trading_snapshot(account_id: str, spec: dict):
+        return trading().add_snapshot(account_id, spec)
+
+    @app.get('/api/v1/trading/snapshots/{snapshot_id}')
+    def read_trading_snapshot(snapshot_id: str):
+        return trading().read_snapshot(snapshot_id)
+
+    @app.get('/api/v1/trading/plans/{plan_id}')
+    def trading_plan(plan_id: str):
+        return trading().read_plan(plan_id)
+
+    @app.post('/api/v1/trading/plans/{plan_id}/fills')
+    def trading_fills(plan_id: str, spec: dict):
+        return trading().record_fills(plan_id, spec)
 
     @app.get("/api/v1/models/{model_id}")
     def model(model_id: str):
@@ -439,8 +718,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return learning().list_runs()
 
     @app.get("/api/v1/learning/runs/{run_id}")
-    def learning_run(run_id: str):
-        return learning().read_run(run_id)
+    def learning_run(run_id: str, view: Literal['full', 'dashboard'] = 'full'):
+        result = learning().read_run(run_id)
+        return learning_dashboard_view(result) if view == 'dashboard' else result
 
     @app.get("/api/v1/learning/series/{series_id}")
     def learning_series(series_id: str):
@@ -456,6 +736,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/watchlist")
     def add_watchlist(body: WatchRequest):
+        if len(personal.watchlist()["items"]) >= 200:
+            raise ValueError("关注池最多 200 只股票，请先移除再添加。")
         personal.add_watchlist([body.symbol])
         return watchlist()
 
@@ -463,6 +745,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def remove_watchlist(symbol: str):
         personal.remove_watchlist(symbol)
         return watchlist()
+
+    @app.post("/api/v1/backtest/preview")
+    def backtest_preview(spec: dict):
+        from lake_equity.learning.preview import BacktestPreview
+        return BacktestPreview(settings.root).preview(spec)
+
+    @app.get("/api/v1/learning/workflows/quarantine")
+    def workflow_quarantine():
+        from lake_equity.learning.quarantine import QuarantineService
+        return QuarantineService(settings.root).listing()
+
+    @app.post("/api/v1/learning/workflows/quarantine/confirm")
+    def workflow_quarantine_confirm(spec: dict):
+        from lake_equity.learning.quarantine import QuarantineService
+        if set(spec) - {"plan_id", "ids", "confirm"}:
+            raise ValueError("Unknown quarantine confirmation parameters")
+        return QuarantineService(settings.root).confirm(spec.get("plan_id"), spec.get("ids"),
+                                                       spec.get("confirm") is True)
+
+    @app.post("/api/v1/backtests/{run_id}/plan")
+    def backtest_plan(run_id: str, spec: dict | None = None):
+        from lake_equity.learning.backtest_plan import BacktestPlanService
+        return BacktestPlanService(settings.root).create(run_id, spec or {})
 
     @app.get("/api/v1/provenance")
     def provenance():

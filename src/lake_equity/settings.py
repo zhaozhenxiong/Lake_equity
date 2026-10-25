@@ -53,10 +53,13 @@ class Settings:
             "KHQUANT_RAW_DB": str(self.raw_db),
             "KHQUANT_KRONOS_ROOT": str(self.root / "var/models/kronos"),
             "KHQUANT_LOG_ROOT": str(self.root / "var/logs/research"),
-            "KHQUANT_COMPUTE_DEVICE": os.environ.get("LAKE_EQUITY_DEVICE", "cpu"),
             "KHQUANT_CPU_WORKERS": "4",
             "TZ": "Asia/Shanghai",
         }
+        # CUDA-first: only override the vendored engine's auto device when the
+        # operator explicitly pins one; otherwise let auto pick the GPU.
+        if os.environ.get("LAKE_EQUITY_DEVICE"):
+            values["KHQUANT_COMPUTE_DEVICE"] = os.environ["LAKE_EQUITY_DEVICE"]
         os.environ.update(values)
         os.environ.setdefault("PROCESSOR_ARCHITECTURE", "AMD64")
         for path in (self.metadata_root, self.artifact_root / "runs", self.root / "var/logs", self.raw_db.parent):

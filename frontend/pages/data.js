@@ -1,5 +1,5 @@
 import {api} from '../core/api.js';
-import {arrayOf,badge,busy,dataTable,disclosure,downloadJson,empty,errorHtml,escapeHtml,formValue,heading,number,showError,table,today,validateDates} from '../core/ui.js';
+import {arrayOf,badge,busy,coverageTiers,dataTable,disclosure,downloadJson,empty,errorHtml,escapeHtml,formValue,heading,number,showError,statusChip,table,today,validateDates} from '../core/ui.js';
 import {submitJob} from '../core/jobs.js';
 import {mountDataOps} from '../core/data-ops.js';
 import {mountDataInspection} from '../core/data-inspection.js';
@@ -9,6 +9,47 @@ export async function mount(host,{signal,params}) {
   let result;
   let watcher;
   host.innerHTML=heading('数据湖','浏览已登记数据集，核对实际覆盖，并用有界查询检查研究输入。',`<a class="button" href="#data?tab=operations">数据运维</a>`)+`<section class="panel"><div class="panel-header"><div><h2>数据集目录</h2><p data-catalog-summary>正在读取登记与本地状态…</p></div><span class="badge blue">CNEquity</span></div><div class="filter-bar"><label class="field-inline">搜索<input id="dataset-search" placeholder="数据集名称或说明" aria-label="搜索数据集"></label><label class="field-inline">分层<select id="dataset-layer"><option value="">全部层</option></select></label><label class="field-inline">本地状态<select id="dataset-availability"><option value="">全部</option><option value="ready">已有数据</option><option value="empty">尚无数据</option></select></label><span class="coverage-count" data-filter-count></span></div><div data-catalog-table><div class="loading-state">正在读取目录…</div></div><div class="table-footer"><span>覆盖日期按数据集实际返回；没有覆盖证明时保留未知。</span><div class="button-row"><button class="small-button" data-page-previous>上一页</button><span data-page-number></span><button class="small-button" data-page-next>下一页</button></div></div></section><section class="panel space-top query-workspace" id="dataset-query"><div class="panel-header"><div><h2>读取数据与凭证</h2><p>每次最多返回指定行数，保留真实读取身份</p></div><button type="button" class="small-button" data-export-query disabled>导出当前查询</button></div><form id="dataset-query-form" class="form-toolbar"><div class="form-grid"><label class="span-two">数据集<select name="dataset" id="query-dataset" required><option value="">选择数据集</option></select></label><label>股票代码<input name="symbol" placeholder="600519.SH（可选）"></label><label>最多行数<select name="limit"><option>100</option><option>200</option><option>500</option></select></label><label>开始日期<input type="date" name="start"></label><label>结束日期<input type="date" name="end"></label><label>可知截至<input type="date" name="as_of"></label><button class="primary" type="submit">读取数据</button></div><p class="form-note" data-query-description>选择数据集后查看说明。日期和代码是否适用，以该数据集的查询合同为准。</p></form><div data-query-output>${empty('选择一份数据开始检查','这里只读取数据；不会自动采集或启动全市场任务。')}</div></section><section class="panel space-top"><div class="panel-header"><div><h2>显式更新与导入</h2><p>提交后在任务页查看进度与实际结果</p></div></div><div class="panel-body"><form id="data-operation-form" class="form-grid"><label class="span-two">数据操作<select name="kind"><option value="update">执行配置中的 CNEquity 日更</option><option value="import">全量导入已有原始行情库</option></select></label><button class="primary" type="submit">提交所选数据任务</button><p class="form-note span-all">日更按本地配置处理实际人口；导入会核验原始行情全库并发布新数据版本。两项均为显式长任务，可能耗时较长，可在任务页取消。</p></form></div><div class="job-inline" data-data-job hidden></div></section>`;
+  host.querySelector('.page-heading').insertAdjacentHTML('afterend',`<section class="panel space-top coverage-panel" data-coverage-panel><div class="panel-header"><div><h2>数据覆盖结论</h2><p data-coverage-caption>正在核验目标日覆盖…</p></div><div class="button-row"><span data-coverage-verdict>${statusChip(null,'读取中')}</span><button type="button" class="small-button" data-refresh-coverage aria-label="刷新数据覆盖结论" title="重新读取数据覆盖结论，不启动采集">刷新</button></div></div><div class="panel-body"><div class="coverage-head" data-coverage-summary></div><div class="coverage-tiers" data-coverage-tiers></div><div class="coverage-foot"><span class="small muted">A 完整 / B 部分 / C 未知或失败 / D 未安排。目录登记不等于完整覆盖。</span></div><details class="advanced-panel" data-coverage-datasets hidden><summary>逐数据集覆盖明细</summary><div class="advanced-body" data-coverage-table></div></details></div></section>`);
+  let coverageValue=null;
+  function coverageRows(value){return arrayOf(value,'datasets');}
+  function renderCoverageFallback(error){
+    const withData=datasets.filter(dataset=>dataset.has_data===true).length;
+    host.querySelector('[data-coverage-caption]').textContent='覆盖结论接口暂不可用；以下为目录登记状态，不是覆盖核验结论。';
+    host.querySelector('[data-coverage-verdict]').innerHTML=statusChip('unknown','覆盖结论未接入');
+    host.querySelector('[data-coverage-summary]').innerHTML=`<div><span class="coverage-eyebrow">目录登记状态</span><h2>${number(datasets.length,0)} 个数据集</h2><p>${number(withData,0)} 个已有本地数据 · 覆盖结论${error?.status?`返回 HTTP ${escapeHtml(error.status)}`:'读取失败'}。目录登记不能代替覆盖核验，缺失项不会被补成通过。</p></div>`;
+    const tiers=[{key:'A',label:'已有数据',value:withData,tone:'good'},{key:'B',label:'部分',value:0,tone:'warn'},{key:'C',label:'尚无本地数据',value:Math.max(0,datasets.length-withData),tone:'bad'},{key:'D',label:'未安排',value:0,tone:'neutral'}];
+    host.querySelector('[data-coverage-tiers]').innerHTML=tiers.map(tier=>`<div class="coverage-tier" data-tone="${tier.tone}"><span class="coverage-key">${tier.key}</span><strong>${number(tier.value,0)}</strong><small>${escapeHtml(tier.label)}</small></div>`).join('');
+    host.querySelector('[data-coverage-datasets]').hidden=true;
+  }
+  function renderCoverage(value){
+    coverageValue=value?.coverage && value.counts===undefined ? value.coverage : value;
+    const coverage=coverageValue, counts=coverage.counts || {};
+    host.querySelector('[data-coverage-caption]').textContent=`目标日 ${coverage.target_date || '—'} · 登记 ${number(counts.registered,0)} 个数据集 · 已尝试 ${number(counts.attempted,0)} 个`;
+    host.querySelector('[data-coverage-verdict]').innerHTML=statusChip(coverage.verdict || null,coverage.verdict?undefined:'结论未返回');
+    host.querySelector('[data-coverage-summary]').innerHTML=`<div><span class="coverage-eyebrow">目标日</span><h2>${escapeHtml(coverage.target_date || '—')}</h2><p>选股可运行 ${coverage.can_scan===true?'是':coverage.can_scan===false?'否':'未返回'} · 回测可运行 ${coverage.can_backtest===true?'是':coverage.can_backtest===false?'否':'未返回'}</p></div>`;
+    host.querySelector('[data-coverage-tiers]').innerHTML=coverageTiers(coverage).map(tier=>`<div class="coverage-tier" data-tone="${tier.tone}"><span class="coverage-key">${tier.key}</span><strong>${number(tier.value,0)}</strong><small>${escapeHtml(tier.label)}</small></div>`).join('');
+    host.querySelector('[data-coverage-datasets]').hidden=false;
+    host.querySelector('[data-coverage-table]').innerHTML=table([
+      {label:'数据集',render:row=>`<span class="code-key">${escapeHtml(row.name || row.dataset || '—')}</span>`},
+      {label:'分层',render:row=>escapeHtml(row.tier || row.layer || '—')},
+      {label:'覆盖状态',render:row=>(row.coverage_status || row.status)?statusChip(row.coverage_status || row.status):statusChip(null,'未返回')},
+      {label:'完整截至',render:row=>escapeHtml(row.complete_through || row.coverage_end || row.through || '—')},
+      {label:'缺失键',render:row=>escapeHtml(Array.isArray(row.missing_keys)?row.missing_keys.join('、'):(row.missing_keys && typeof row.missing_keys==='object'?JSON.stringify(row.missing_keys):(row.missing_keys || '—'))),wrap:true},
+      {label:'原因码',render:row=>escapeHtml(row.reason_code || row.reason || '—'),wrap:true}
+    ],coverageRows(coverage),{emptyTitle:'服务未返回逐数据集明细',emptyDescription:'覆盖结论已返回，但逐数据集明细缺失；缺失不会被推断为通过。'});
+  }
+  async function loadCoverage(){
+    let value=null,error=null;
+    try{value=await api.coverage({date:today()},signal);}
+    catch(failure){
+      if(failure.name==='AbortError')return;
+      if([400,404,422].includes(failure.status)){try{value=await api.coverage({},signal);}catch(inner){error=inner;}}
+      else error=failure;
+    }
+    if(signal.aborted)return;
+    if(value)renderCoverage(value);else renderCoverageFallback(error);
+  }
+  host.addEventListener('click',event=>{if(event.target.closest('[data-refresh-coverage]'))loadCoverage();},{signal});
   host.insertAdjacentHTML('beforeend',`<section class="panel space-top"><div class="panel-header"><div><h2>质量与来源核验</h2><p>质量运行、跨来源差异与隔离记录，完整性资格独立显示</p></div><button type="button" class="small-button" data-refresh-quality>刷新质量</button></div><div data-quality-output><div class="loading-state">正在读取已保存质量记录…</div></div></section>`);
   async function loadQuality(){
     const target=host.querySelector('[data-quality-output]');
@@ -76,6 +117,7 @@ export async function mount(host,{signal,params}) {
     if(params.get('dataset')){host.querySelector('#query-dataset').value=params.get('dataset');describe();}
     renderCatalog();
   }catch(error){showError(host,error);host.querySelector('[data-catalog-table]').innerHTML=empty('目录读取失败','检查服务连接后刷新。');}
+  await loadCoverage();
   await loadQuality();
   mountDataInspection(host,{signal,datasets});
   const stopOps=await mountDataOps(host,{signal});

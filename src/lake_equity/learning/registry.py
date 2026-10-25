@@ -28,17 +28,42 @@ class ModelRegistry:
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.directory = self.root / 'var/learning/models'
+        self.archive_directory = self.root / 'var/learning/archive/models'
         self.index = self.root / 'var/learning/models.db'
 
-    def list_models(self):
+    def list_models(self, include_archived=False):
         if not self.index.is_file():
             return {'models': [], 'series': []}
+        archived = self.archived_ids()
         with closing(sqlite3.connect(self.index.as_uri() + '?mode=ro', uri=True)) as conn:
             models = [json.loads(row[0]) for row in conn.execute('SELECT summary FROM models ORDER BY rowid DESC')]
             series = [json.loads(row[0]) for row in conn.execute('SELECT summary FROM series ORDER BY rowid DESC')]
         memberships = {member['model_id']: row['series_id'] for row in series for member in row['members']}
-        models = [dict(row, series_id=memberships.get(row['model_id'])) for row in models]
+        models = [dict(row, series_id=memberships.get(row['model_id']),
+                       archived=row.get('model_id') in archived) for row in models]
+        if not include_archived:
+            models = [row for row in models if not row['archived']]
         return {'models': models, 'series': series}
+
+    def archived_ids(self):
+        if not self.index.is_file():
+            return set()
+        with closing(sqlite3.connect(self.index.as_uri() + '?mode=ro', uri=True)) as conn:
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='archived_models'").fetchone()
+            if not exists:
+                return set()
+            return {row[0] for row in conn.execute('SELECT id FROM archived_models')}
+
+    def directory_for(self, model_id):
+        if not isinstance(model_id, str) or not re.fullmatch(r'model-[0-9a-f]{32}', model_id):
+            raise ValueError('Invalid model identity')
+        for directory in (self.directory / model_id, self.archive_directory / model_id):
+            if directory.is_dir():
+                if directory.is_symlink() or directory.parent.is_symlink():
+                    raise ValueError('Model directories cannot be symlinks')
+                return directory
+        raise KeyError(model_id)
 
     def _read(self, identity, table):
         prefix = 'model' if table == 'models' else 'series'
@@ -59,9 +84,7 @@ class ModelRegistry:
 
     def read_model(self, model_id):
         result = self._read(model_id, 'models')
-        directory = self.directory / model_id
-        if directory.is_symlink() or self.directory.is_symlink():
-            raise ValueError('Model directories cannot be symlinks')
+        directory = self.directory_for(model_id)
         manifest = directory / 'manifest.json'
         if not manifest.is_file() or json.loads(manifest.read_text(encoding='utf-8')) != result:
             raise ValueError('Frozen model manifest mismatch')
@@ -77,7 +100,7 @@ class ModelRegistry:
     def predict(self, model_id, frame):
         from .models import predict_saved
         model = self.read_model(model_id)
-        return predict_saved(self.directory / model_id, frame), model
+        return predict_saved(self.directory_for(model_id), frame), model
 
     def register_run(self, run_id):
         from .service import LearningService

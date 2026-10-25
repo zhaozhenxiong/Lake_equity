@@ -58,7 +58,7 @@ def fit_transform(train, valid, test, columns):
 
 
 def fit_predict(train, valid, test, columns, *, model_type, backend, seed, directory, root,
-                check_cancel=None, model_options=None):
+                check_cancel=None, model_options=None, worker_timeout_seconds=900):
     if model_type not in ('ridge', 'lightgbm', 'mlp') or backend not in ('local', 'qlib'):
         raise ValueError('Unsupported learning model_type or backend')
     if model_type != 'mlp' and model_options is not None:
@@ -94,8 +94,8 @@ def fit_predict(train, valid, test, columns, *, model_type, backend, seed, direc
             try:
                 while process.poll() is None:
                     check_stop(check_cancel)
-                    if time.monotonic() - started > 900:
-                        raise TimeoutError('Qlib fit exceeded its 900 second worker bound')
+                    if time.monotonic() - started > worker_timeout_seconds:
+                        raise TimeoutError(f'Qlib fit exceeded its {worker_timeout_seconds} second worker bound')
                     time.sleep(.15)
                 if process.returncode:
                     raise RuntimeError(f"Qlib worker failed; inspect {directory / 'worker.log'}")

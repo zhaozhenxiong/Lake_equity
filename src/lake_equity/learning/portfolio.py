@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,7 @@ DEFAULTS = dict(
     top_k=10, rebalance_sessions=5, max_total_weight=.9, max_stock_weight=.2,
     initial_cash=1_000_000., commission=.0003, min_commission=5., slippage=.0005,
     transfer_fee=.00001, cost_stress=1., max_volume_participation=.01, require_verified_rules=False,
+    hold_buffer=0, drawdown_guard=0., drawdown_scale=1., vol_target=0., vol_lookback=60,
 )
 
 
@@ -38,17 +40,23 @@ def _config(supplied):
     if unknown:
         raise ValueError("Unknown portfolio parameters: " + ", ".join(sorted(unknown)))
     cfg = {**DEFAULTS, **(supplied or {})}
-    for key in ("top_k", "rebalance_sessions"):
+    for key in ("top_k", "rebalance_sessions", "hold_buffer"):
         value = cfg[key]
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise ValueError(key + " must be a positive integer")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(key + " must be a nonnegative integer")
+    if cfg["top_k"] < 1 or cfg["rebalance_sessions"] < 1:
+        raise ValueError("top_k and rebalance_sessions must be positive")
     if not isinstance(cfg['require_verified_rules'], bool):
         raise ValueError('require_verified_rules must be boolean')
-    for key in set(DEFAULTS) - {"top_k", "rebalance_sessions", "require_verified_rules"}:
+    for key in set(DEFAULTS) - {"top_k", "rebalance_sessions", "require_verified_rules", "hold_buffer", "vol_lookback"}:
         value = cfg[key]
         if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) < 0:
             raise ValueError(key + " must be finite and nonnegative")
         cfg[key] = float(value)
+    if not isinstance(cfg["vol_lookback"], int) or isinstance(cfg["vol_lookback"], bool) or cfg["vol_lookback"] < 10:
+        raise ValueError("vol_lookback must be an integer >= 10")
+    if not 0 <= cfg["drawdown_guard"] <= 1 or not 0 < cfg["drawdown_scale"] <= 1:
+        raise ValueError("Require 0 <= drawdown_guard <= 1 and 0 < drawdown_scale <= 1")
     if cfg["initial_cash"] <= 0 or cfg["cost_stress"] <= 0:
         raise ValueError("initial_cash and cost_stress must be positive")
     if not 0 < cfg["max_stock_weight"] <= cfg["max_total_weight"] <= 1:
@@ -58,11 +66,20 @@ def _config(supplied):
     return cfg
 
 
-def _stamp(value):
+def _parse_stamp(value):
     stamp = pd.Timestamp(value)
     if pd.isna(stamp):
         raise ValueError("Missing prediction availability")
     return stamp.tz_localize("Asia/Shanghai") if stamp.tzinfo is None else stamp.tz_convert("Asia/Shanghai")
+
+
+_cached_stamp = lru_cache(maxsize=20000, typed=True)(_parse_stamp)
+
+
+def _stamp(value):
+    if isinstance(value, str) and value.lower() in {"now", "today"}:
+        return _parse_stamp(value)
+    return _cached_stamp(value)
 
 
 def _positive(value):
@@ -104,25 +121,44 @@ def _metrics(daily, trades, orders, initial_cash):
     peaks = np.maximum.accumulate(np.r_[initial_cash, equity])[1:]
     std = float(returns.std(ddof=1)) if len(returns) > 1 else 0.
     notional = sum(row["shares"] * row["price"] for row in trades)
+    sessions = len(daily)
+    missing_open = sum(1 for row in orders
+                       if row.get("status") == "rejected" and row.get("reason") == "missing_open")
+    # Data that prevents every intended fill from executing is not a valid
+    # flat strategy: keep the ledger but label performance unavailable.
+    performance_status = "unavailable" if (not trades and missing_open) else "valid"
+    performance_reason = "no_executable_next_open" if performance_status == "unavailable" else None
+    from .metrics import probabilistic_sharpe_ratio, sharpe_standard_error
+    psr = probabilistic_sharpe_ratio(returns) if len(returns) >= 60 and std > 1e-12 else None
+    sharpe_se = sharpe_standard_error(returns) if len(returns) >= 60 and std > 1e-12 else None
+    # A one- or two-session window annualized by ^(252/n) produces absurd
+    # headline numbers (a 2-day 2.8% move becomes +3056%). Keep total_return and
+    # suppress annualized_return until there is a meaningful observation span.
+    annualized = float((equity[-1] / initial_cash) ** (252 / sessions) - 1) if sessions >= 60 else None
     return dict(
         initial_cash=initial_cash, ending_equity=float(equity[-1]),
         total_return=float(equity[-1] / initial_cash - 1),
-        annualized_return=float((equity[-1] / initial_cash) ** (252 / len(equity)) - 1),
+        annualized_return=annualized,
+        annualized_reason=None if annualized is not None else "insufficient_sessions",
         max_drawdown=float((1 - equity / peaks).max()),
         sharpe=float(returns.mean() / std * np.sqrt(252)) if len(returns) >= 60 and std > 1e-12 else None,
         sharpe_reason=None if len(returns) >= 60 and std > 1e-12 else "insufficient_sessions_or_variation",
-        trading_sessions=len(daily), fills=len(trades),
+        psr=psr, sharpe_standard_error=sharpe_se,
+        sharpe_annualization=252, sharpe_risk_free=0.0,
+        trading_sessions=sessions, fills=len(trades),
         fees=sum(row["fee"] for row in trades), traded_notional=notional,
         turnover=notional / float(equity.mean()),
         rejected_orders=sum(row["status"] == "rejected" for row in orders),
         partial_orders=sum(row["status"] == "partial" for row in orders),
         stale_valuation_days=sum(bool(row["stale_symbols"]) for row in daily),
-        annualized_estimate=len(daily) < 252,
+        missing_open_rejections=missing_open,
+        performance_status=performance_status, performance_reason=performance_reason,
+        annualized_estimate=sessions < 252,
     )
 
 
 def backtest_scores(prices: pd.DataFrame, predictions: pd.DataFrame, calendar: list[str],
-                    config: dict | None = None, *, run_id: str, check_cancel=None) -> dict:
+                    config: dict | None = None, *, run_id: str, check_cancel=None, research_replay=False) -> dict:
     """Rank each rebalance's OOS scores and trade only the next calendar open.
 
     Failed/partial orders expire on that open. Missing scores leave inventory
@@ -152,7 +188,10 @@ def backtest_scores(prices: pd.DataFrame, predictions: pd.DataFrame, calendar: l
     if scores[["model_name", "fold", "train_end", "available_at"]].isna().any().any():
         raise ValueError("OOS predictions require model, fold, training end and availability")
     scores["train_end"] = pd.to_datetime(scores.train_end, format="%Y-%m-%d", errors="raise").dt.strftime("%Y-%m-%d")
-    if (scores.train_end >= scores.date).any():
+    if type(research_replay) is not bool:
+        raise ValueError('research_replay must be boolean')
+    future_fit_rows = int((scores.train_end >= scores.date).sum())
+    if future_fit_rows and not research_replay:
         raise ValueError("In-sample predictions: train_end must precede decision date")
     scores["score"] = pd.to_numeric(scores.score, errors="coerce")
     if not np.isfinite(scores.score).all():
@@ -316,9 +355,33 @@ def backtest_scores(prices: pd.DataFrame, predictions: pd.DataFrame, calendar: l
             if day not in grouped:
                 decisions.append(dict(date=day, status="skipped", reason="no_current_oos_scores_inventory_unchanged"))
                 continue
-            selected = grouped[day].sort_values(["score", "symbol"], ascending=[False, True]).head(cfg["top_k"])
-            weight = min(cfg["max_total_weight"] / len(selected), cfg["max_stock_weight"])
-            weights = {symbol: weight for symbol in selected.symbol}
+            ranked = grouped[day].sort_values(["score", "symbol"], ascending=[False, True]).reset_index(drop=True)
+            leaders = list(ranked.symbol.head(cfg["top_k"]))
+            if cfg["hold_buffer"] > 0 and broker.positions:
+                ranks = {symbol: position for position, symbol in enumerate(ranked.symbol)}
+                held = [symbol for symbol, shares in broker.positions.items() if shares]
+                retained = sorted((symbol for symbol in held
+                                   if ranks.get(symbol, cfg["top_k"] + cfg["hold_buffer"]) < cfg["top_k"] + cfg["hold_buffer"]),
+                                  key=lambda symbol: ranks[symbol])
+                chosen = list(dict.fromkeys([*retained, *leaders]))[:cfg["top_k"]]
+            else:
+                chosen = leaders
+            selected = ranked.loc[ranked.symbol.isin(chosen)]
+            exposure = 1.0
+            equities = [cfg["initial_cash"], *[float(row["equity"]) for row in daily]]
+            if cfg["drawdown_guard"] > 0 and len(equities) >= 20:
+                drawdown = 1.0 - equities[-1] / max(equities)
+                if drawdown >= cfg["drawdown_guard"]:
+                    exposure *= cfg["drawdown_scale"]
+            if cfg["vol_target"] > 0 and len(equities) > cfg["vol_lookback"]:
+                tail = np.asarray(equities[-(cfg["vol_lookback"] + 1):], dtype=float)
+                recent = tail[1:] / tail[:-1] - 1.0
+                realized = float(recent.std(ddof=1)) * math.sqrt(252)
+                if realized > 1e-12:
+                    exposure *= min(1.0, cfg["vol_target"] / realized)
+            weight = (min(cfg["max_total_weight"] * exposure / len(chosen), cfg["max_stock_weight"])
+                      if chosen else 0.0)
+            weights = {symbol: weight for symbol in chosen}
             execute_on = dates[index + 1] if index + 1 < len(dates) else None
             decisions.append(dict(date=day, status="scheduled" if execute_on else "unexecuted",
                                   reason=None if execute_on else "no_next_verified_session",
@@ -328,6 +391,8 @@ def backtest_scores(prices: pd.DataFrame, predictions: pd.DataFrame, calendar: l
                 pending = dict(date=day, weights=weights)
     trades = broker.ledger.to_frame().to_dict("records")
     return dict(schema="lake_target_weight_backtest_v1", run_id=run_id, status="completed",
+                evaluation_mode='in_sample_research_replay' if research_replay else 'chronological_fit_oos',
+                future_training_information_rows=future_fit_rows, oos_ranking_eligible=not research_replay,
                 research_only=True, strict_history_eligible=False, paper_allocation_eligible=False,
                 independent_forward_status="pending", account_scope="shared_cash_account",
                 evaluation_start=sessions[0], evaluation_end=sessions[-1],

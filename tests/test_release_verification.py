@@ -131,6 +131,45 @@ def test_legacy_source_manifests_remain_supported(tmp_path):
     assert len(result["sources"]) == 2
 
 
+@pytest.mark.parametrize("tamper", [None, "undeclared", "sha256", "original_sha256", "path"])
+def test_legacy_patch_requires_exact_original_and_reviewed_hashes(tmp_path, tamper):
+    test_legacy_source_manifests_remain_supported(tmp_path)
+    source = tmp_path / "vendor/cnequity/source.py"
+    patch = dict(source_manifest="cnequity_source.json", path="source.py",
+                 original_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                 reason="Synthetic reviewed integration patch")
+    source.write_bytes(b"reviewed integration patch")
+    patch["sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    if tamper in {"sha256", "original_sha256"}:
+        patch[tamper] = "0" * 64
+    elif tamper == "path":
+        patch["path"] = "unknown.py"
+    if tamper != "undeclared":
+        (tmp_path / "docs/provenance/local_patches.json").write_text(json.dumps(dict(schema=1, patches=[patch])))
+    result = verify(tmp_path)
+    assert result["status"] == ("ok" if tamper is None else "failed")
+
+
+@pytest.mark.parametrize("change", ["bad_schema", "bad_hash", "empty_reason", "duplicate"])
+def test_invalid_local_patch_declaration_fails_closed(tmp_path, change):
+    test_legacy_source_manifests_remain_supported(tmp_path)
+    patch = dict(source_manifest="cnequity_source.json", path="source.py", original_sha256="a" * 64,
+                 sha256="b" * 64, reason="Synthetic reviewed patch")
+    payload = dict(schema=1, patches=[patch])
+    if change == "bad_schema":
+        payload["schema"] = True
+    elif change == "bad_hash":
+        patch["sha256"] = "not-a-hash"
+    elif change == "empty_reason":
+        patch["reason"] = ""
+    else:
+        payload["patches"].append(patch)
+    (tmp_path / "docs/provenance/local_patches.json").write_text(json.dumps(payload))
+    result = verify(tmp_path)
+    assert result["status"] == "failed"
+    assert result["sources"][0]["source"] == "local_patches.json"
+
+
 @pytest.mark.parametrize("tamper", [False, True])
 def test_cli_source_failure_has_nonzero_exit(tmp_path, monkeypatch, capsys, tamper):
     manifest(tmp_path)

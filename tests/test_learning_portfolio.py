@@ -48,6 +48,42 @@ def test_next_open_uses_real_broker_cash_ledger_and_preserves_inventory():
     assert "position_simulation.py" in result["implementation_sha256"]
 
 
+def test_training_period_replay_is_explicit_and_keeps_true_cutoff():
+    predictions = scores()
+    predictions['train_end'] = DATES[-1]
+    with pytest.raises(ValueError, match='train_end'):
+        backtest_scores(prices(), predictions, DATES, run_id='forbidden')
+    replay = backtest_scores(prices(), predictions, DATES, run_id='diagnostic', research_replay=True)
+    assert replay['evaluation_mode'] == 'in_sample_research_replay'
+    assert replay['future_training_information_rows'] == len(predictions)
+    assert replay['oos_ranking_eligible'] is False
+    assert predictions.train_end.eq(DATES[-1]).all()
+
+
+def test_cached_time_parsing_preserves_complete_account_and_rejections(monkeypatch):
+    from lake_equity.learning import portfolio
+    cached = portfolio._stamp
+    portfolio._cached_stamp.cache_clear()
+    predictions = scores(DATES[:5])
+    monkeypatch.setattr(portfolio, '_stamp', portfolio._parse_stamp)
+    original = run(predictions=predictions, rebalance_sessions=1)
+    monkeypatch.setattr(portfolio, '_stamp', cached)
+    replay = run(predictions=predictions, rebalance_sessions=1)
+    assert original == replay
+    assert portfolio._cached_stamp.cache_info().currsize <= 20000
+    invalid = predictions.copy()
+    invalid.loc[0, 'available_at'] = DATES[0] + 'T14:59:59+08:00'
+    with pytest.raises(ValueError, match='decision close'):
+        run(predictions=invalid)
+    invalid.loc[0, 'available_at'] = DATES[1] + 'T09:30:00+08:00'
+    with pytest.raises(ValueError, match='next executable open'):
+        run(predictions=invalid)
+    assert cached('2025-03-03T07:00:00Z') == cached('2025-03-03T15:00:00+08:00')
+    size = portfolio._cached_stamp.cache_info().currsize
+    cached('now')
+    assert portfolio._cached_stamp.cache_info().currsize == size
+
+
 def test_future_prices_cannot_change_past_fills_or_equity():
     original = prices()
     changed = original.copy()
@@ -67,6 +103,9 @@ def test_missing_next_open_expires_without_later_fill():
     assert result["rejections"][0]["date"] == DATES[1]
     assert result["rejections"][0]["requested_shares"] is None
     assert all(row["equity"] == 100_000. for row in result["daily"])
+    assert result["metrics"]["performance_status"] == "unavailable"
+    assert result["metrics"]["performance_reason"] == "no_executable_next_open"
+    assert result["metrics"]["missing_open_rejections"] == 1
 
 
 def test_cost_stress_uses_existing_dated_fee_helper():

@@ -22,5 +22,14 @@
       "distributed_file_count": 813
     }
   ],
-  "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original engine and native wheel bytes are unchanged."
+  "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original native wheel bytes are unchanged; any reviewed local source patches are declared separately.",
+  "local_patches": [
+    {
+      "source_manifest": "khquant_source.json",
+      "path": "my_strategy/services/kronos_prediction.py",
+      "original_sha256": "9bdfd562765c23f30af179374ca00995685e8b3a7e9f7746fb7c83c1b0c65e32",
+      "sha256": "5f55a5d0e489044bdadd4fdbafb986d59e02c06fca4ed593d7b97675343e1cfb",
+      "reason": "LakeEquity integration patch: recognize reviewed raw-price sources including finalized after-close THS daily bars when checking Kronos prediction input eligibility; retain original frozen-source identity and native wheel bytes."
+    }
+  ]
 }

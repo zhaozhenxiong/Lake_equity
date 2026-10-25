@@ -19,3 +19,5 @@ LakeEquity's original integration code is licensed under MIT; see [LICENSE](LICE
 Public source provenance is summarized in `docs/provenance/sources.json`; `release-manifest.json` records the exact distributed bytes. Non-runtime historical documents and private migration/audit evidence are omitted from the public subset. The original frozen numerical engines and native wheel bytes are preserved; no complete upstream Git history is fabricated.
 
 Source-code licenses do not grant rights to upstream market data, account records or model weights. Raw market data, trained models, accounts, credentials, machine configuration and private audit state are excluded from this source distribution.
+
+Reviewed changes made after the research snapshot freeze are declared separately in `docs/provenance/local_patches.json`, including the original and patched SHA-256 values. The original source manifests remain unchanged; the source summary identifies these local integration patches explicitly.

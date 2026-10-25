@@ -104,19 +104,59 @@ MLP 为 `d→64→32→1`，使用 GELU、Dropout、AdamW 和验证 MSE 早停�
 | `GET /models`、`GET /models/{id}` | 冻结模型、系列索引及内容校验 |
 | `GET /learning/series/{id}` | 样本外模型切换合同 |
 | `POST /jobs`，`kind=model_refit` | 参数为 `run_id`、`model_name` 和可选 `end` |
-| `POST /jobs`，`kind=scan` | 参数为 `model_id`、`scope`、`symbols`、`end` |
-| `POST /jobs`，`kind=backtest` | `mode=frozen` 传 `model_id`；`mode=rolling` 传 `series_id`，另传 `start`、`end`、`top_k`、`initial_cash` |
+| `POST /jobs`，`kind=scan` | 参数为 `model_id`/`release_id`、`scope`、`symbols`、`end`、可选 `universe_scope`、`expected_release_id` |
+| `POST /jobs`，`kind=backtest` | `mode=frozen` 传 `model_id`；`mode=rolling` 传 `series_id`；`mode=watchlist_replay` 由默认释放序列解析；另传 `start`、`end`、`top_k`、`initial_cash` 与可选 `scope`/`symbols`/`universe_scope`/`expected_release_id` |
+| `POST /backtest/preview` | 只读预检：解析版本与核验交易日窗口、逐只资格/排名/原因；不创建运行目录、不评分、不交易 |
+| `GET /learning/workflows/quarantine` | 只读列出失败构建隔离目录；`POST .../quarantine/confirm` 需新预览 `plan_id`、精确 `ids` 与 `confirm=true`，删除后写审计 |
+| `POST /backtests/{run_id}/plan` | 受控研究动作：`confirm=true` 后从已保存回测期末研究账户生成次日条件计划（`bplan-`），不写交易账户/计划表 |
 
 选股只加载权重一次，跨 200 股批次复用。特征计算保持训练时相同的历史起点与预热前缀，避免均线近乎相等时，不同浮点累计路径改变排列特征；不舍弃精度或给旧权重换公式。先固定完整人口，再统一排名；scored、missing、failed、unprocessed 分母完整保留。未完成任务不公布最终排名。实际行情日和请求截止日分别展示，网页对全部结果分页。新股票标记是否来自训练请求池；缺失因子使用原训练中位数并披露数量。
 
 固定模型回测必须开始于全部训练和验证信息截止之后。滚动回测加载原冻结数据和对应折权重，只允许原 OOS 区间和评价人口。不能把今天 Top K 回填过去。两个入口共同使用 Top K、权重和真实 Broker/Ledger 共享现金账户。
 
+### 关注池历史回放与有效池
+
+默认方法的当前权重重拟合后信息截止很新，固定权重回测只能覆盖截止之后的很短区间。关注池需要更长窗口时使用 `mode=watchlist_replay`：按默认释放已保存滚动序列（`series_id`）的逐折冻结权重，在每折区间内只对请求的关注股票推理，只在这些股票内交易。该模式不重训、不引入未来权重，但**评价人口被用户事后限制**，因此报告固定 `fit_oos=false`、`oos_ranking_eligible=false`、`restricted_cross_section=true`、`watchlist_selection_bias='post_hoc_user_watchlist'`，不能当作原全市场 OOS、模型排名或账户资格。区间必须落在序列覆盖内；不在保存评估数据中的股票逐只列为 `unavailable`，不补数据。序列之后即使湖已核验出更新的交易日（例如行情更新到 `2026-10-23` 而序列止于 `2026-10-22`），也不会进入该回放，页面在日期旁给出替代入口：要看最新交易日用固定模型短区间（默认权重），要让长区间包含新日期需重跑十年研究协议并把请求截止设为该交易日。
+
+`universe_scope` 控制默认释放的动态流动性池如何作用于显式股票池：`release`（默认）完整应用“资格规则 + 最多 1000 只排名截断”；`explicit_symbols`（仅 `scope=symbols` 且股票非空，冻结/回放模式）只应用资格规则（覆盖率、近期覆盖、成交额门槛、bar 有效、上市历史），**跳过 1000 只数量上限**，报告记录 `cap_applied=false`、`universe_scope` 与原策略。资格不合格的股票仍逐只排除并给出原因，不静默纳入。
+
+`mode=rolling` 仍只允许原评价人口；`mode=research_replay` 是当前权重的样本内/事后重建回放，只能作研究探索。任何模式都不把结果自动转成账户、订单或资格。
+
+报告新增 `cohort_effective`（请求/已评分/被排除/不可用及原因），`population` 保持请求人口原义。提交前可用 `POST /backtest/preview` 看到有效窗口与逐只资格；预检只读、有符号数与时间预算，不创建运行目录。
+
+### 失败构建与次日计划
+
+失败构建按约定保留 `.{kind}-{id}.building` 隔离目录；`GET /learning/workflows/quarantine` 只读预览，`POST .../quarantine/confirm` 必须使用新预览的 `plan_id`、精确 `ids` 与 `confirm=true` 才会删除并写审计，不删除已保存报告、模型、账户或原始数据。
+
+已完成的 `model_backtest_v1` 可显式生成次日条件计划（`POST /backtests/{run_id}/plan`，`confirm=true`）：信号日取回测 `actual_end`，执行日取其后第一个已核验交易日，研究账户取回测 `portfolio.terminal_state`，T+1 用期末 lot 判定，参与率/整手/费用沿用执行规则。该计划保存为 `bplan-` 工作流报告（`family=backtest_plan_v1`），标注 `backtest_terminal_research_account`、`broker_connected=false`、`automatic_orders=false`，不写 `var/learning/trading.db` 的账户或计划表。
+
+### 前瞻记账与核验（forward）
+
+`run.py forward` 在 T 日收盘后冻结因子分与 Kronos 观察，T+1 数据核验后再对账。所有写入 append-only（`var/learning/forward.db`，逐日 attempts/verifications 保留），记录身份同时包含数据版本、发布版本、Kronos 参数与实现文件 SHA。`record` 默认只接受最新已发布交易日；`--origin backfill` 允许用更早版本模型回填历史交易日（记录标注事后选择风险，不冒充前瞻证据）。`verify` 在后续交易日尚未发布时返回 `pending`，不用估算值代替；行情修订产生新的 `revision` 行而不覆盖旧结果。Kronos 质量门槛沿用现有观测合同（成功/不可用/失败/未预算分别计数），不可用不冒充观望。
+
+工程默认优先 CUDA：MLP 学习 CLI 与训练请求未显式指定设备时使用可用 GPU（`learning/device.py`），Kronos 使用 `cuda`，实际设备写入报告与登记；显式 `cuda` 不可用时报错而不静默回退。结构分析与精确价格仍在 CPU float64。
+
+```powershell
+.\.venv\Scripts\python.exe run.py forward record --day 2026-10-23 --symbols 002436.SZ,600862.SH --horizon 5
+.\.venv\Scripts\python.exe run.py forward record --day 2026-10-21 --origin backfill --release-id RELEASE_ID --symbols 002436.SZ,600862.SH --horizon 1
+.\.venv\Scripts\python.exe run.py forward ingest --fusion-run-id fusion-446eca8e1c754142816e16c5971830e7
+.\.venv\Scripts\python.exe run.py forward verify --day 2026-10-22
+.\.venv\Scripts\python.exe run.py forward report --day 2026-10-22
+.\.venv\Scripts\python.exe run.py forward report --limit 20
+```
+
+`forward ingest` 把一次已保存的融合扫描（候选横截面、Kronos 观测、冻结数据代际）作为一个前瞻记录写入账本，用于获得比关注池更充分的互证样本；它不重新训练、不改变融合报告，日期早于最新发布时自动标为回填。候选横截面建议用 `fusion-scan` 的 `kronos.horizon=1` 以匹配次日核验口径；horizon 不一致的对账不应用于方向结论。
+
+只读接口：`GET /api/v1/forward/days`、`GET /api/v1/forward/metrics`、`GET /api/v1/forward/summary`、`GET /api/v1/forward/evaluations`、`GET /api/v1/forward/days/{day}`；写操作只走显式 CLI/任务，不通过 GET 触发。模型中心“前瞻验证与 Kronos 互证”卡片只读取这些接口；不足 40 个独立信号日只描述现象，不产生参数候选。
+
 ```powershell
 .\.venv\Scripts\python.exe run.py model-scan --model-id MODEL_ID --scope all --end 2026-10-22
 .\.venv\Scripts\python.exe run.py model-backtest --mode rolling --series-id SERIES_ID --start OOS_START --end OOS_END
+.\.venv\Scripts\python.exe run.py model-backtest --mode watchlist_replay --release-id active --symbols 002436.SZ,600862.SH --start 2022-07-05 --end 2026-10-22
+.\.venv\Scripts\python.exe run.py maintenance --quarantine-preview
 .\.venv\Scripts\python.exe run.py model-refit --run-id RUN_ID --model-name factor_mlp
 ```
 
-不可变版本位于 `var/learning/models`，新选股和回测位于 `var/learning/workflows`，均使用 SQLite 索引和内容清单。失败构建保留隔离目录。融资融券 T+2 仍为披露的研究假设，当前人口、复权和公司行为仍未认证；负结果如实保存，不按测试收益自动调参或翻转信号。
+不可变版本位于 `var/learning/models`，新选股和回测位于 `var/learning/workflows`，均使用 SQLite 索引和内容清单。失败构建保留隔离目录，清理走 `maintenance --quarantine-preview` 与显式确认（见上）。融资融券 T+2 仍为披露的研究假设，当前人口、复权和公司行为仍未认证；负结果如实保存，不按测试收益自动调参或翻转信号。
 
 上游参考：[StaticDataLoader](https://github.com/microsoft/qlib/blob/v0.9.8/qlib/data/dataset/loader.py)、[处理器](https://github.com/microsoft/qlib/blob/v0.9.8/qlib/data/dataset/processor.py)、[LightGBM](https://github.com/microsoft/qlib/blob/v0.9.8/qlib/contrib/model/gbdt.py)、[滚动重拟合示例](https://github.com/microsoft/qlib/blob/v0.9.8/examples/rolling_process_data/workflow.py)。这些链接用于设计依据；实际运行版本以环境与报告记录为准。

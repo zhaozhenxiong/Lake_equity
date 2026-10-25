@@ -274,6 +274,82 @@ spec=backtestSpec({...fields,mode:'rolling',scope:'symbols',symbols:'600519.SH'}
 """)
 
 
+def test_ten_year_study_freezes_windows_seeds_and_separates_confirmation():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {studySpec,studyReport,releaseSummary} from './core/study.js';
+globalThis.FormData=class{constructor(values){this.values=values;}get(key){const value=this.values[key];return Array.isArray(value)?value[0]:value??null;}getAll(key){return this.values[key]??[];}has(key){return Boolean(this.values[key]);}};
+const values={start:'2016-10-23',end:'2026-10-22',train_windows:['756','1260'],models:['ridge','mlp'],backend:'qlib',include_margin:true,valid_sessions:'126',test_sessions:'63',holdout_sessions:'252',horizon:'5',top_k:'10',initial_cash:'1000000',device:'cuda',max_epochs:'50'};
+const spec=studySpec(values);assert.deepEqual(spec.train_windows,[756,1260]);assert.deepEqual(spec.seeds,[42,137,2026]);assert.equal(spec.holdout_sessions,252);assert.equal(spec.model_options.device,'cuda');assert.equal(spec.scope,'all');
+assert.throws(()=>studySpec({...values,models:[]}),/至少/);
+const html=studyReport({status:'completed',study_id:'study-saved',selected_protocol:{model_type:'ridge',train_sessions:756},candidates:[{protocol_id:'ridge',development:{median_year_excess:-.02},confirmation:{median_year_excess:-.04}}]});assert(html.includes('-2%'));assert(html.includes('-4%'));assert(html.includes('最新重拟合权重待前瞻'));assert(html.includes('data-publish-study'));
+assert(releaseSummary({release_id:'<script>',model_id:'fixed',protocol:{}}).includes('&lt;script&gt;'));
+""")
+
+
+def test_external_study_progress_is_visible_and_never_a_global_percent():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {studyProgress,studyReport} from './core/study.js';
+import {progressValue} from './core/ui.js';
+const running={status:'running',study_id:'external',updated_at:'2026-10-23T07:13:52+00:00',progress:{phase:'study_fold',protocol_id:'pv38-ridge-w756',seed:42,current:17,total:17,segment:'confirmation'}};
+const html=studyProgress(running);assert(html.includes('pv38-ridge-w756 / 42'));assert(html.includes('17 / 17'));assert(html.includes('历史留出复核'));assert(html.includes('2026-10-23 15:13:52'));assert(html.includes('组合、费用和基准评估'));assert(!html.includes('100%'));assert(html.includes('仅此协议与种子'));
+assert.equal(progressValue({kind:'research_study',progress:running.progress}),null);assert.equal(progressValue({kind:'scan',progress:{current:1,total:2}}),50);
+const card=studyReport(running).split('<details')[0];assert(card.includes('17 / 17'));assert(card.includes('pv38-ridge-w756'));assert(!card.includes('data-study-resume'));
+assert(studyProgress(running,{compact:true}).includes('种子 42'));assert(studyProgress({...running,status:'interrupted'}).includes('上次运行的保存点'));assert(!studyProgress({...running,status:'failed'}).includes('仍在运行'));
+assert(studyProgress({status:'running',progress:{phase:'study_features',current:200,total:3862}}).includes('已处理股票'));assert(studyProgress({status:'completed'}).includes('查看研究报告'));
+assert(studyProgress({...running,progress:{...running.progress,protocol_id:'<script>'}}).includes('&lt;script&gt;'));
+""")
+
+
+def test_study_final_seed_ranking_is_visible_separately_from_all_candidates():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {studyReport} from './core/study.js';
+const report={status:'completed',study_id:'study-saved',selected_protocol:{model_type:'mlp',train_sessions:756},selection:{publication_seed:42},candidates:[{protocol_id:'initial-ridge',development:{median_year_excess:.02}}],seed_aggregates:[{protocol_id:'reviewed-mlp',seeds_reviewed:[42,137,2026],development:{median_year_excess:-.03,max_drawdown:.2},seed_median_excess_std:.01}]};
+const html=studyReport(report).split('<details')[0];assert(html.includes('多种子复核与最终排序'));assert(html.includes('42 / 137 / 2026'));assert(html.includes('reviewed-mlp'));assert(html.includes('initial-ridge'));assert(html.includes('-3%'));assert(html.includes('发布权重固定用种子 42'));assert(html.indexOf('复核协议')<html.indexOf('候选协议'));
+""")
+
+
+def test_training_views_request_summaries_and_full_report_download_is_explicit():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {api} from './core/api.js';
+import {fullReportLink} from './core/ui.js';
+import {learningReport} from './pages/models.js';
+const calls=[];globalThis.fetch=async(url,options)=>{calls.push({url,options});return{ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>({})};};
+await api.learningRun('learn-saved');await api.study('study-saved');await api.report('backtest-saved');
+assert.equal(calls[0].url,'/api/v1/learning/runs/learn-saved?view=dashboard');assert.equal(calls[1].url,'/api/v1/learning/studies/study-saved?view=dashboard');assert.equal(calls[2].url,'/api/v1/reports/backtest-saved?view=dashboard');assert(calls.every(row=>!row.options.method));
+const report={run_id:'learn-saved',dashboard_view:{kind:'dashboard_summary',full_report_url:'/api/v1/learning/runs/learn-saved'},models:[],folds:[]};
+const html=learningReport(report);assert(html.includes('界面摘要与产物校验'));assert(!html.includes('完整报告与产物校验'));assert(html.includes('href="/api/v1/learning/runs/learn-saved" download'));assert(html.includes('下载完整报告 JSON'));assert.equal(calls.length,3);
+assert.equal(fullReportLink({}), '');assert.equal(fullReportLink({dashboard_view:{full_report_url:'javascript:alert(1)'}}),'');
+""")
+
+
+def test_historical_and_replay_requests_preserve_their_evidence_modes():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {backtestSpec} from './pages/backtest.js';
+globalThis.FormData=class{constructor(values){this.values=values;}get(key){return this.values[key]??null;}};
+const values={start:'2018-01-01',end:'2026-10-22',top_k:'10',initial_cash:'1000000',model_id:'fixed'};
+let spec=backtestSpec({...values,mode:'historical'});assert.equal(spec.release_id,'active');assert(!('model_id' in spec));
+spec=backtestSpec({...values,mode:'historical',study_id:'study-frozen'});assert.equal(spec.study_id,'study-frozen');assert(!('release_id' in spec));
+spec=backtestSpec({...values,mode:'research_replay',version_source:'active'});assert.equal(spec.mode,'research_replay');assert.equal(spec.release_id,'active');assert(!('model_id' in spec));
+""")
+
+
+def test_snapshot_import_preserves_lots_and_discards_only_saved_identity_metadata():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {cleanSnapshot,accountSnapshot,planReport} from './core/trading.js';
+const snapshot={as_of:'2026-10-22',cash:100,positions:[{symbol:'600000.SH',total_shares:100,sellable_shares:0,buy_lots:[{date:'2026-10-22',shares:100}]}],permissions:{star:false},source:'manual',is_fixture:false,snapshot_id:'saved',account_id:'account'};
+assert.deepEqual(cleanSnapshot(snapshot).positions[0].buy_lots,snapshot.positions[0].buy_lots);assert(!('snapshot_id' in cleanSnapshot(snapshot)));
+globalThis.FormData=class{constructor(values){this.values=values;}get(key){return this.values[key]??null;}};
+assert.deepEqual(accountSnapshot({source_mode:'json',snapshot_json:JSON.stringify({snapshot})}),cleanSnapshot(snapshot));
+assert(planReport({plan_id:'plan',is_fixture:true,orders:[],holds:[]}).includes('合成验收账户'));
+""")
+
+
 def test_data_operations_preserve_typed_controls_and_require_confirmed_review():
     run_module(r"""
 import assert from 'node:assert/strict';
@@ -287,6 +363,69 @@ assert.deepEqual(operationParams({},fields),{enabled:true,datasets:['daily_bars'
     assert "storageReview" in source
     assert "value.confirm_enabled===true" in source
     assert "maintenance_confirmed:values.has" in source
+
+
+def test_data_operation_fields_use_shanghai_today_and_keep_pack_values():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {operationField,operationParams} from './core/data-ops.js';
+const RealDate=Date;
+globalThis.Date=class extends RealDate{constructor(...values){super(...(values.length?values:['2026-10-22T16:30:00Z']));}};
+assert(operationField({name:'trade_date',kind:'date'}).includes('value="2026-10-23"'));
+assert(operationField({name:'trade_date',kind:'date'},'2026-09-01').includes('value="2026-09-01"'));
+assert(operationField({name:'start',kind:'date'}).includes('value=""'));
+const toggle=operationField({name:'backfill',kind:'bool',label:'补跑 <检查>',help:'仅重跑 <指定日期>'},true);
+assert(toggle.includes(' checked'));assert(toggle.includes('补跑 &lt;检查&gt;'));
+assert(toggle.includes('仅重跑 &lt;指定日期&gt;'));assert(!toggle.includes('<指定日期>'));
+const pack={name:'pack',kind:'multi',choices:['market','fundamentals','universe']};
+const html=operationField(pack,['market','fundamentals']);
+assert(html.includes('value="market" selected>行情（核心组）'));
+assert(html.includes('value="fundamentals" selected>基本面'));
+assert(html.includes('value="universe">历史 ST 范围（无日更组）'));
+globalThis.FormData=class{get(){return null;}getAll(){return ['market','fundamentals'];}};
+assert.deepEqual(operationParams({},[pack]),{pack:['market','fundamentals']});
+globalThis.FormData=class{get(){return null;}getAll(){return [];}};
+assert.deepEqual(operationParams({},[pack]),{pack:[]});
+""")
+
+
+def test_data_operation_occupancy_distinguishes_jobs_and_actual_maintenance():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {operationOccupancyHtml} from './core/data-ops.js';
+const daily=operationOccupancyHtml({engine_locks:['daily_ingestion'],local_job_busy:true,storage_busy:false});
+assert(daily.includes('日更采集正在运行'));assert(daily.includes('共用一个采集锁'));
+assert(daily.includes('href="#tasks"'));assert(!daily.includes('存储维护'));
+assert(!daily.includes('本地数据或研究任务正在运行'));
+const local=operationOccupancyHtml({local_job_busy:true,storage_busy:false});
+assert(local.includes('本地数据或研究任务正在运行'));assert(!local.includes('存储维护'));
+const maintenance=operationOccupancyHtml({engine_locks:['daily_ingestion'],storage_busy:true});
+assert(maintenance.includes('存储维护正在运行'));assert(maintenance.includes('日更采集正在运行'));
+assert.equal(operationOccupancyHtml({storage_busy:false,local_job_busy:false}), '');
+assert.equal(operationOccupancyHtml(), '');
+""")
+
+
+def test_opening_data_operations_reads_occupancy_without_starting_an_operation():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {mountDataOps} from './core/data-ops.js';
+function element(){return {innerHTML:'',listeners:new Map(),isConnected:true,addEventListener(kind,callback){this.listeners.set(kind,callback);},setAttribute(){},replaceChildren(){this.innerHTML='';},insertAdjacentHTML(){}};}
+const form=element(),select=element(),description=element(),fields=element(),content=element(),result=element();
+content.querySelector=selector=>({'[name=operation]':select,'[data-operation-form]':form,'[data-op-description]':description,'[data-op-fields]':fields})[selector];
+const host={...element(),querySelector:selector=>({'[data-data-ops-content]':content,'[data-data-ops-preview]':result})[selector],querySelectorAll:()=>[]};
+const calls=[];
+globalThis.fetch=async(url,options)=>{calls.push({url,options});return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>({operations:[{id:'daily.full',title:'日更',params:[{name:'trade_date',kind:'date'},{name:'no_events',kind:'bool',help:'跳过事件流'}]}],occupancy:{engine_locks:['daily_ingestion'],storage_busy:false,local_job_busy:true}})};};
+globalThis.FormData=class{get(){return 'daily.full';}};
+const controller=new AbortController(),cleanup=await mountDataOps(host,{signal:controller.signal});
+assert(content.innerHTML.includes('日更采集正在运行'));assert(content.innerHTML.includes('href="#tasks"'));
+select.listeners.get('change')();
+assert.match(fields.innerHTML,/name="trade_date" type="date" value="\d{4}-\d{2}-\d{2}"/);
+assert(fields.innerHTML.includes('跳过事件流'));
+assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/v1/data/operations');
+assert.equal(calls[0].options.method,undefined);
+controller.abort();cleanup();
+""")
 
 
 def test_prediction_chart_and_data_operations_use_only_unified_api_paths():
@@ -333,3 +472,79 @@ assert(!storageReviewHtml(result,false).includes('data-storage-confirm'));
 assert(!storageReviewHtml({...result,status:'checking'},true).includes('data-storage-confirm'));
 const html=storageReviewHtml(result,true);assert(html.includes('revision-exact'));assert(html.includes('1,234'));assert(html.includes('name="confirmed" required'));assert(html.includes('name="maintenance_confirmed" required'));assert(!html.includes('checked'));
 """)
+
+
+def test_next_natural_day_is_strict_iso_calendar_arithmetic():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {nextNaturalDay} from './core/ui.js';
+assert.equal(nextNaturalDay('2026-10-21'),'2026-10-22');
+assert.equal(nextNaturalDay('2026-12-31'),'2027-01-01');
+assert.equal(nextNaturalDay('2027-02-28'),'2027-03-01');
+assert.equal(nextNaturalDay('2028-02-28'),'2028-02-29');
+assert.equal(nextNaturalDay('2028-02-29'),'2028-03-01');
+assert.equal(nextNaturalDay('2026-02-29'),'');
+assert.equal(nextNaturalDay('2026-02-30'),'');
+assert.equal(nextNaturalDay('2026-04-31'),'');
+assert.equal(nextNaturalDay('2026-13-01'),'');
+assert.equal(nextNaturalDay('2026-00-10'),'');
+assert.equal(nextNaturalDay('2026-1-5'),'');
+assert.equal(nextNaturalDay('2026-10-21T00:00:00Z'),'');
+assert.equal(nextNaturalDay(''),'');
+assert.equal(nextNaturalDay(null),'');
+assert.equal(nextNaturalDay(undefined),'');
+""")
+
+
+def test_default_model_identity_uses_active_release_and_flags_missing_model_detail():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {defaultModelIdentity} from './core/models.js';
+const active={model_id:'model-aad295f46480b5cd09cc488f71a5c80d',model_type:'mlp',information_cutoff:'2026-10-21'};
+const response={models:[{model_id:'older'},active],research_active:{release_id:'release-b43d198c',model_id:active.model_id,information_cutoff:'2026-10-21'}};
+const frozen=JSON.stringify(response);
+const identity=defaultModelIdentity(response);
+assert.equal(identity.release.release_id,'release-b43d198c');assert.equal(identity.modelId,active.model_id);assert.equal(identity.model,active);assert.equal(identity.source,'active_release');assert.equal(identity.detailMissing,false);
+assert.equal(JSON.stringify(response),frozen);
+const archived=defaultModelIdentity({models:[{model_id:'older'}],research_active:{release_id:'release-b43d198c',model_id:active.model_id}});
+assert.equal(archived.release.release_id,'release-b43d198c');assert.equal(archived.modelId,active.model_id);assert.equal(archived.model,null);assert.equal(archived.source,'active_release');assert.equal(archived.detailMissing,true);
+const missing=defaultModelIdentity({models:[active],research_active:{release_id:'release-b43d198c'}});
+assert.equal(missing.modelId,'');assert.equal(missing.model,null);assert.equal(missing.detailMissing,true);
+const none=defaultModelIdentity({models:[active],research_active:null,series:[],assets:{}});
+assert.deepEqual(none,{release:null,model:null,modelId:'',source:'no_default_method',detailMissing:false});
+assert.deepEqual(defaultModelIdentity(),{release:null,model:null,modelId:'',source:'no_default_method',detailMissing:false});
+""")
+
+
+def test_watchlist_selection_helpers_scope_links_to_the_default_method():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {selectedWatchSymbols,watchlistLinks} from './pages/watchlist.js';
+const rows=[{symbol:'002436.SZ'},{symbol:'600862.SH'},{symbol:'600869.SH'}];
+const selected=new Set(['600862.SH','999999.SZ','002436.SZ','000420.SZ']);
+assert.deepEqual(selectedWatchSymbols(selected,rows),['002436.SZ','600862.SH']);
+assert.deepEqual(selectedWatchSymbols(['000420.SZ','600862.SH'],[...rows,{symbol:'000420.SZ'}]),['600862.SH','000420.SZ']);
+assert.deepEqual(selectedWatchSymbols(new Set(),rows),[]);
+assert.deepEqual(selectedWatchSymbols(selected,[]),[]);
+const links=watchlistLinks(['002436.SZ','600862.SH']);
+assert(links.backtest.startsWith('#backtest?'));assert(links.backtest.includes('release_id=active'));assert(links.backtest.includes('mode=frozen'));
+assert(links.backtest.includes('002436.SZ'));assert(links.backtest.includes('600862.SH'));assert(!links.backtest.includes('model_id='));
+assert(links.scan.startsWith('#scan?'));assert(links.scan.includes('release_id=active'));assert(links.scan.includes('002436.SZ'));assert(links.scan.includes('600862.SH'));assert(!links.scan.includes('mode=frozen'));assert(!links.scan.includes('model_id='));
+assert.equal(watchlistLinks([]).scan,'#scan?release_id=active');
+""")
+
+
+def test_frozen_default_method_backtest_spec_keeps_the_watchlist_pool():
+    run_module(r"""
+import assert from 'node:assert/strict';
+import {backtestSpec} from './pages/backtest.js';
+globalThis.FormData=class{constructor(values){this.values=values;}get(key){return this.values[key]??null;}};
+const fields={start:'2026-10-22',end:'2026-10-24',top_k:'10',initial_cash:'1000000',version_source:'active',scope:'symbols',symbols:'002436.SZ,600862.SH'};
+const spec=backtestSpec({...fields,mode:'frozen'});
+assert.equal(spec.mode,'frozen');assert.equal(spec.release_id,'active');assert.equal(spec.scope,'symbols');assert.deepEqual(spec.symbols,['002436.SZ','600862.SH']);assert(!('model_id' in spec));assert.equal(spec.start,'2026-10-22');
+assert.throws(()=>backtestSpec({...fields,mode:'frozen',symbols:''}),/股票/);
+assert.throws(()=>backtestSpec({...fields,mode:'frozen',symbols:'   '}),/股票/);
+const training=backtestSpec({...fields,mode:'frozen',scope:'training'});
+assert.equal(training.release_id,'active');assert(!('scope' in training));assert(!('symbols' in training));assert(!('model_id' in training));
+""")
+

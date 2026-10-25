@@ -20,6 +20,14 @@ from my_strategy.services.kronos_assets import asset_root as resolve_asset_root,
 
 SCHEMA = "kronos_forecast_v1"
 FEATURES = ("open", "high", "low", "close", "volume", "amount")
+# Sources whose unadjusted close/volume/amount are audited trade prints. ths is
+# after-close only (docs/provenance/ths_daily_bars_qualification.md); the lake
+# materialization keeps its legacy has_trade_price semantics, so this gate must
+# qualify by source rather than by that legacy-only flag.
+VERIFIED_PRICE_SOURCES = {
+    "sina_unadjusted_v1", "fuyao_unadjusted_v1", "sina", "eastmoney",
+    "eastmoney_unadjusted_v1", "tdx_protocol", "baostock", "ths",
+}
 _MODEL_LOCK = threading.RLock()
 _SINGLETON: dict[str, Any] = {}
 
@@ -108,6 +116,12 @@ def prepare_input(frame: pd.DataFrame, future_dates, *, symbol: str, as_of: str,
     if len(future) != horizon or len(set(future)) != horizon or future != sorted(future) or future[0] <= cutoff:
         raise ValueError("future_dates must contain exactly horizon unique ascending future trading dates")
     attrs = frame.attrs
+    unverified = None
+    if "has_trade_price" in current:
+        unverified_mask = current["has_trade_price"] != 1
+        if "source" in current:
+            unverified_mask &= ~current["source"].astype(str).isin(VERIFIED_PRICE_SOURCES)
+        unverified = int(unverified_mask.sum())
     description = {"symbol": symbol, "as_of": cutoff.date().isoformat(), "lookback": lookback,
                    "horizon": horizon, "history_start": current.index[0].date().isoformat(),
                    "history_end": current.index[-1].date().isoformat(), "rows": len(current),
@@ -116,7 +130,7 @@ def prepare_input(frame: pd.DataFrame, future_dates, *, symbol: str, as_of: str,
                    "amount_unit": attrs.get("amount_unit", "unverified"),
                    "last_close": float(values[-1, 3]), "timezone": "Asia/Shanghai",
                    "source": sorted(set(current["source"].astype(str))) if "source" in current else [],
-                   "unverified_trade_price_bars": int((current["has_trade_price"] != 1).sum()) if "has_trade_price" in current else None}
+                   "unverified_trade_price_bars": unverified}
     description["data_sha256"] = _hash({"dates": [d.date().isoformat() for d in current.index],
                                         "values": values.tolist(), "contract": description})
     return current, [value.date().isoformat() for value in future], description
@@ -325,7 +339,7 @@ def predict(frame: pd.DataFrame, future_dates, *, symbol: str, as_of: str,
         allocated = int(torch.mps.current_allocated_memory()) if actual_device == "mps" else None
     phase_started = time.monotonic()
     result = summarize_samples(paths, dates, input_info["last_close"])
-    verified_sources = {"sina_unadjusted_v1", "fuyao_unadjusted_v1"}
+    verified_sources = VERIFIED_PRICE_SOURCES
     source_ok = bool(input_info["source"]) and set(input_info["source"]).issubset(verified_sources)
     contract_ok = (input_info["volume_unit"] == "shares" and input_info["amount_unit"] == "CNY"
                    and input_info["price_basis"] == "unadjusted"

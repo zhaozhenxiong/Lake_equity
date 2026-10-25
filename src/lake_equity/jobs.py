@@ -113,7 +113,7 @@ class JobManager:
             with self.lock:
                 body = self.get(identity)
                 reported = result.get("status")
-                outcome = "failed" if reported == "failed" else "cancelled" if reported == "cancelled" else "partial" if reported in {"partial", "blocked", "pending", "interrupted", "incomplete", "deferred"} else "succeeded"
+                outcome = "failed" if reported == "failed" else "cancelled" if reported == "cancelled" else "partial" if reported in {"partial", "blocked", "pending", "interrupted", "incomplete", "deferred", "completed_degraded"} else "succeeded"
                 body.update(status=outcome, updated_at=now(), result={"path": result_path.name, "sha256": hashlib.sha256(encoded).hexdigest(),
                             "run_id": result.get("lake_run_id", result.get("run_id", result.get("manifest_id")))})
                 body["business_status"] = reported
@@ -125,11 +125,35 @@ class JobManager:
                 body["run_id"] = body["result"]["run_id"]
                 self._save(body)
         except Exception as error:
+            failure = {
+                "schema": "job_error_v1",
+                "status": "cancelled" if cancelled() or isinstance(error, JobCancelled) else "failed",
+                "job_id": identity,
+                "kind": body.get("kind"),
+                "error": f"{type(error).__name__}: {error}",
+                "error_type": type(error).__name__,
+                "finished_at": now(),
+            }
+            failure_path = None
+            try:
+                encoded = json.dumps(failure, ensure_ascii=False, default=str, allow_nan=False).encode("utf-8")
+                failure_path = self.root / f"{identity}.json"
+                temporary = failure_path.with_suffix(".tmp")
+                temporary.write_bytes(encoded)
+                temporary.replace(failure_path)
+            except OSError:
+                failure_path = None
             with self.lock:
                 body = self.get(identity)
-                body.update(status="cancelled" if cancelled() or isinstance(error, JobCancelled) else "failed", updated_at=now(),
-                            error=f"{type(error).__name__}: {error}")
-                if body["status"] == "cancelled":
+                status = failure["status"]
+                body.update(status=status, updated_at=now(), error=failure["error"])
+                body["business_status"] = status
+                if failure_path is not None:
+                    body["result"] = {"path": failure_path.name,
+                                      "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+                                      "run_id": None}
+                    body["run_id"] = None
+                if status == "cancelled":
                     body.update(cancel_effective=True, cancel_note="任务已响应取消，已保存批次保留。")
                 self._save(body)
 

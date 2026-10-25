@@ -76,6 +76,19 @@ def test_learning_gets_only_read_catalog_and_verified_saved_reports(learning_api
     assert client.get("/api/v1/learning/runs/tampered").status_code == 400
 
 
+def test_dashboard_report_view_keeps_full_read_endpoint_and_never_starts_work(learning_api):
+    client, app, settings, calls, started = learning_api
+    full = client.get('/api/v1/learning/runs/learn-synthetic').json()
+    summary = client.get('/api/v1/learning/runs/learn-synthetic?view=dashboard').json()
+    assert 'dashboard_view' not in full
+    assert summary['dashboard_view']['full_report_url'] == '/api/v1/learning/runs/learn-synthetic'
+    assert {key: summary[key] for key in full} == full
+    assert client.get('/api/v1/reports/learn-synthetic?view=dashboard').json() == summary
+    assert client.get('/api/v1/learning/runs/learn-synthetic?view=invalid').status_code == 422
+    assert app.state.jobs.list() == []
+    assert not started.is_set()
+
+
 def test_factor_job_bypasses_legacy_input_lock_and_manifest(learning_api):
     client, app, settings, calls, started = learning_api
     settings.raw_db.with_suffix(".manifest.json").unlink()
@@ -101,6 +114,27 @@ def test_learning_job_responds_to_existing_cancel_endpoint(learning_api):
     job = terminal(client, identity)
     assert job["status"] == "cancelled"
     assert job["cancel_effective"] is True
+    assert app.state.research.calls == []
+
+
+def test_kronos_prediction_waits_for_training_lease_and_can_be_cancelled(learning_api):
+    client, app, settings, calls, started = learning_api
+    lock_path = settings.root/'var/learning/compute.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(lock_path)):
+        submitted = client.post('/api/v1/jobs', json={'kind':'prediction', 'params':{'symbol':'600519.SH', 'end':'2026-10-22'}})
+        assert submitted.status_code == 202
+        identity = submitted.json()['id']
+        for _ in range(100):
+            waiting = client.get(f'/api/v1/jobs/{identity}').json()
+            if (waiting.get('progress') or {}).get('phase') == 'waiting_compute_lease':
+                break
+            time.sleep(.01)
+        assert waiting['progress']['phase'] == 'waiting_compute_lease'
+        assert app.state.research.calls == []
+        assert client.post(f'/api/v1/jobs/{identity}/cancel').status_code == 200
+        assert terminal(client, identity)['status'] == 'cancelled'
+    assert not started.is_set()
     assert app.state.research.calls == []
 
 
@@ -162,6 +196,6 @@ import {api} from './core/api.js';
 const calls=[];
 globalThis.fetch=async(url,options)=>{calls.push({url,options});return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>({})};};
 await api.learningCatalog();await api.learningRuns();await api.learningRun('learn-one');
-assert.deepEqual(calls.map(call=>call.url),['/api/v1/learning/catalog','/api/v1/learning/runs','/api/v1/learning/runs/learn-one']);
+assert.deepEqual(calls.map(call=>call.url),['/api/v1/learning/catalog','/api/v1/learning/runs','/api/v1/learning/runs/learn-one?view=dashboard']);
 assert(calls.every(call=>!call.options.method || call.options.method==='GET'));
 """)

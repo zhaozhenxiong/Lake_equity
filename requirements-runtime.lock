@@ -27,7 +27,6 @@ html5lib==1.1
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.20
-iniconfig==2.3.0
 interface_meta==2.0.1
 Jinja2==3.1.6
 joblib==1.6.0
@@ -37,7 +36,6 @@ lightgbm==4.7.0
 lxml==6.1.3
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
-maturin==1.13.1
 mdurl==0.1.2
 mini-racer==0.14.1
 mpmath==1.3.0
@@ -50,7 +48,6 @@ packaging==26.3
 pandas==3.0.6
 patsy==1.0.3
 plotly==7.1.0
-pluggy==1.6.0
 polars==1.44.2
 polars-runtime-32==1.44.2
 polars-runtime-compat==1.44.2; sys_platform == "win32"
@@ -61,7 +58,6 @@ pydantic==2.13.5
 pydantic_core==2.46.5
 Pygments==2.21.0
 pypdf==6.21.2
-pytest==9.1.1
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 requests==2.34.2

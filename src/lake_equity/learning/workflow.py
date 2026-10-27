@@ -16,7 +16,7 @@ import pandas as pd
 import polars as pl
 
 from .dataset import DatasetSession, _read, build_dataset
-from .models import check_stop, load_saved, rolling_folds
+from .models import check_stop, explain_saved, load_saved, rolling_folds
 from .population import population
 from .registry import ModelRegistry, canonical, digest
 
@@ -64,7 +64,7 @@ class LearningWorkflow:
         if not self.index.is_file():
             return {'reports': []}
         with closing(sqlite3.connect(self.index.as_uri() + '?mode=ro', uri=True)) as conn:
-            rows = [json.loads(row[0]) for row in conn.execute('SELECT summary FROM runs ORDER BY rowid DESC LIMIT ?', (limit,))]
+            rows = [json.loads(row[0]) for row in conn.execute('SELECT summary FROM runs ORDER BY rowid DESC LIMIT ?', (-1 if limit is None else limit,))]
         return {'reports': [row for row in rows if kind is None or row['kind'] == kind]}
 
     def read_run(self, run_id):
@@ -199,6 +199,14 @@ class LearningWorkflow:
         top_k = params.get('top_k', 20)
         if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
             raise ValueError('top_k must be an integer in [1,100]')
+        date_resolution = dict(source='explicit_request', warning=None)
+        if params.get('end') is None:
+            from lake_equity.pipeline import _default_target_date
+            target, _, source, error = _default_target_date(self.root)
+            if target is None:
+                raise ValueError('Cannot resolve the last closed trading session: ' + str(error or 'calendar unavailable'))
+            params['end'] = target
+            date_resolution = dict(source=source, warning=error)
         end = _day(params.get('end'), 'end')
         requested_release_id = params.get('release_id')
         universe_scope = _universe_scope(params, 'scan', default_scope='symbols')
@@ -213,7 +221,10 @@ class LearningWorkflow:
         history_start = self._history_start(model)
         session = DatasetSession(self.root, params.get('read_ref'), check_cancel)
         sources = {}
-        calendar = self._sessions(session, end, sources)
+        calendar = self._sessions(session, '9999-12-31', sources)
+        requested_calendar = [day for day in calendar if day <= end]
+        if not requested_calendar:
+            raise ValueError('No verified trading session at the requested cutoff')
         # The requested cutoff may be a holiday or a session whose bars have not
         # been published. Resolve the actual market date, and disclose both.
         evidence = session.source_files('daily_bars', '1900-01-01', end)
@@ -223,7 +234,7 @@ class LearningWorkflow:
                   .filter(pl.col('trade_date') <= date.fromisoformat(end)).select(pl.col('trade_date').max()).collect().item())
         if latest is None:
             raise ValueError('No published bars at the requested cutoff')
-        as_of = min(calendar[-1], str(latest)[:10])
+        as_of = min(requested_calendar[-1], str(latest)[:10])
         if as_of <= model['information_cutoff']:
             raise ValueError('Frozen inference date must follow all training and validation information')
         cohort = population(session, params.get('symbols'), scope=params.get('scope', 'symbols'), end=as_of)
@@ -245,6 +256,14 @@ class LearningWorkflow:
                 universe_symbols = set(universe_on_date(universe, as_of)['symbols'])
         rows = {symbol: dict(symbol=symbol, score=None, rank=None, status='unprocessed', reason='not_processed',
                              is_training_member=symbol in model['population']) for symbol in cohort['symbols']}
+        if session.snapshot.get('datasets', {}).get('instruments', {}).get('available'):
+            catalog = _read(session.store, session.snapshot, 'instruments', '1900-01-01', as_of,
+                            cohort['symbols'], sources, check_cancel, session)
+            if {'symbol', 'name'} <= set(catalog):
+                for symbol, group in catalog.groupby('symbol'):
+                    names = {value.strip() for value in group['name'] if isinstance(value, str) and value.strip()}
+                    if symbol in rows and len(names) == 1:
+                        rows[symbol]['name'] = next(iter(names))
         if eligibility is not None:
             reasons = {row.symbol: str(row.reason) for row in eligibility.itertuples()}
             for symbol in set(rows) - universe_symbols:
@@ -253,6 +272,7 @@ class LearningWorkflow:
             for symbol in set(rows) - universe_symbols:
                 rows[symbol].update(status='excluded', reason='outside_as_of_coverage_liquidity_universe')
         inference_symbols = [symbol for symbol in cohort['symbols'] if symbol in universe_symbols]
+        explanation_rows, quotes = {}, {}
         cancelled = False
         from lake_equity.jobs import JobCancelled
         try:
@@ -266,10 +286,18 @@ class LearningWorkflow:
                 eligible = frame.feature_eligible.eq(True) & frame.legacy_ma_eligible.eq(True)
                 candidate = frame.loc[eligible]
                 scores = infer(candidate) if len(candidate) else []
+                explained = explain_saved(self.registry.directory_for(model['model_id']), candidate,
+                    scores=scores, feature_groups=data.get('feature_groups'))
+                explanation_rows.update({row['symbol']: row for row in explained['rows']})
                 for observation, score in zip(candidate.to_dict('records'), scores):
                     row = rows[observation['symbol']]
                     row.update(score=float(score), status='scored', reason=None,
                                imputed_feature_count=int(sum(not np.isfinite(float(observation[col])) for col in model['columns'])))
+                    if observation['symbol'] in explanation_rows:
+                        row.update(explanation_summary=explanation_rows[observation['symbol']]['summary'],
+                                   explanation_ref=dict(run_id=run_id, symbol=observation['symbol']))
+                from .scan_explanations import quote_context
+                quotes.update(quote_context(data['frame'], as_of, symbols))
                 for observation in frame.loc[~eligible].to_dict('records'):
                     rows[observation['symbol']].update(status='missing', reason='no_valid_bar_as_of' if not observation['bar_valid'] else 'insufficient_verified_history')
                 if progress:
@@ -326,12 +354,20 @@ class LearningWorkflow:
             cap_applied=cap_applied, release_universe_policy=policy, excluded=excluded, unavailable=unavailable)
         (working / 'population.json').write_text(canonical(cohort), encoding='utf-8')
         pd.DataFrame(rows.values()).to_parquet(working / 'scores.parquet', index=False)
+        (working / 'quotes.json').write_text(canonical(quotes), encoding='utf-8')
         report = dict(family='model_scan_v1', kind='scan', run_id=run_id, lake_run_id=run_id,
             created_at=datetime.now().astimezone().isoformat(), status='cancelled' if cancelled else 'completed' if complete else 'partial',
             spec=params, model_id=model['model_id'], model_version=model['version'], information_cutoff=model['information_cutoff'],
             frozen_at=model['frozen_at'], as_of=as_of, requested_cutoff=end, end=as_of, scope=cohort['scope'],
+            date_resolution=date_resolution,
             population=dict(total=cohort['total'], **counts, sha256=cohort['sha256']),
             cohort_effective=cohort_effective,
+            source_context=dict(read_ref=session.snapshot['read_ref'], as_of=as_of,
+                next_session=next((day for day in calendar if day > as_of), None),
+                calendar_recent=[day for day in calendar if day <= as_of][-64:],
+                reviewed_symbols=[symbol for symbol, row in rows.items() if row['status'] != 'unprocessed'],
+                quotes=dict(artifact='quotes.json', sha256=digest(working / 'quotes.json'), count=len(quotes),
+                            reviewed_symbols=list(quotes))),
             rows=ordered + [row for row in rows.values() if row['status'] != 'scored'],
             top=ordered[:top_k] if complete else [], final_ranking=complete,
             feature_history_start=history_start,
@@ -344,6 +380,8 @@ class LearningWorkflow:
             limitations=['Current published population is a frozen research cohort; it is not certified historical membership.',
                           'Missing factors use the original training medians; per-row imputation counts are disclosed.',
                           'Close-derived ranks are research for the following verified session, not executable orders.'])
+        from .scan_explanations import save_explanations
+        report['explanation'] = save_explanations(working, report, model, explanation_rows)
         return self._save(report, working)
 
     def backtest(self, params, progress=None, check_cancel=None):

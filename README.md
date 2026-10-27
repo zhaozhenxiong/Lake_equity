@@ -31,6 +31,20 @@ NVIDIA 环境可显式选择 `--device cuda`，安装 CUDA 13.0 版 PyTorch；�
 
 **首次安装不附带行情、训练权重、Kronos 模型资产、个人账户或历史研究记录。** 请在数据湖中配置并采集你有权使用的数据，检查发布版本、交易日历和覆盖范围后再训练；缺少数据时页面保持空状态。Kronos 需另行准备合法模型资产。首次启动和能力目录就绪不代表数据已经完整。
 
+## 配置
+
+LakeEquity 自身设置使用环境变量，不读取额外的应用 TOML 示例文件：
+
+| 变量 | 用途与默认值 |
+| --- | --- |
+| `LAKE_EQUITY_HOME` | 项目根目录；默认按安装位置解析 |
+| `LAKE_EQUITY_PORT` | 服务端口；默认 `8130` |
+| `LAKE_EQUITY_RAW_DB` | 研究输入 SQLite；默认 `var/research_inputs/current/khquant_raw.db` |
+| `LAKE_EQUITY_DEVICE` | 可选计算设备覆盖；默认由研究引擎自动选择 |
+| `LAKE_EQUITY_API_TOKEN` | API 访问令牌；绑定非回环地址时必须设置 |
+
+`configs/cnequity.toml` 是安装器生成、由本机数据配置使用的文件，已被 `.gitignore` 排除；不要把其中的绝对路径或凭据复制进公开配置。
+
 ## 一键流程与单一默认方法
 
 “研究概览”页只有一个主按钮：**一键更新并生成今日结果**。它按固定顺序执行全量数据更新、覆盖判定、研究输入物化、默认方法维护、默认方法选股与回测，完成后给出流水线报告。任一必需数据不完整时会在覆盖判定阶段明确阻断，不产生“最终排名”。
@@ -74,16 +88,18 @@ py -3.12 -m venv var/runtimes/qlib
 ```powershell
 .\lake.bat verify-sources
 .\lake.bat doctor
-.\.venv\Scripts\python.exe -m pip install pytest
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
 `doctor` 会如实报告数据、日历和模型资产缺项；空安装显示 `partial` 是预期情况。公开源码包的 `release-manifest.json` 列出实际分发文件、大小和 SHA-256，校验失败返回非零退出码。
 
+2026-10-27 维护回归为 **920 项通过、1 项按既有本地证据门槛跳过**；公开包包含 2,190 个文件，生产锁 95 项，开发锁额外 3 项。精简实测、历史验收和未覆盖项见 [版本记录](docs/CHANGELOG.md) 与 [发行说明](docs/RELEASE.md)。
+
 - [多因子学习、CLI 与模型身份](docs/LEARNING.md)
 - [版本更新与发布范围](docs/CHANGELOG.md)
 - [一键流水线与默认方法](docs/PIPELINE.md)
-- [Sharpe 导向的优化计划](docs/SHARPE_OPTIMIZATION_PLAN.md)
+- [Sharpe 研究与验证](docs/SHARPE_OPTIMIZATION_PLAN.md)
 - [模拟执行规则与局限](docs/EXECUTION_RULES.md)
 - [板块行情特征](docs/MARKET_FEATURES.md)
 - [统一接口与旧入口迁移](docs/LEGACY_RETIREMENT.md)

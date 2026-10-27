@@ -82,7 +82,7 @@ class HistoryReader:
             with closing(_connection(path)) as connection:
                 if not _table(connection, table):
                     continue
-                rows = connection.execute(f"SELECT payload FROM {table} ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+                rows = connection.execute(f"SELECT payload FROM {table} ORDER BY rowid DESC LIMIT ?", (-1 if limit is None else limit,)).fetchall()
                 items.extend(self._job(provider, json.loads(row[0])) for row in rows)
         directory = self.config.meta_root / "serve_jobs"
         if directory.is_dir():
@@ -173,14 +173,58 @@ class HistoryReader:
         if kind in {None, "simulation", "backtest"} and path.is_file():
             with closing(_connection(path)) as connection:
                 if _table(connection, "results"):
-                    rows = connection.execute("SELECT cache_key,created_at FROM results WHERE namespace='simulations' ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+                    rows = connection.execute("SELECT cache_key,created_at FROM results WHERE namespace='simulations' ORDER BY created_at DESC LIMIT ?", (-1 if limit is None else limit,)).fetchall()
                     items.extend({"run_id": row["cache_key"], "kind": "simulation", "created_at": row["created_at"],
                                   "historical_read_only": True, "status": "saved"} for row in rows)
         return {"reports": items}
 
-    def prediction_chart(self, reference):
+    def prediction_chart(self, reference, prediction_run_id=None):
         from my_strategy.services.prediction_chart import prediction_chart
         if not (self.research_root / "research.db").is_file():
             raise KeyError(reference)
         with closing(ReadOnlyResearchStore(self.research_root)) as store:
-            return prediction_chart(SimpleNamespace(store=store, raw_db=self.settings.raw_db), reference)
+            result = prediction_chart(SimpleNamespace(store=store, raw_db=self.settings.raw_db), reference)
+        if prediction_run_id is not None and result.get('history_verification', {}).get('reason_code') == 'history_price_contract_unverified':
+            return self._analysis_bound_prediction_chart(reference, prediction_run_id, result)
+        return result
+
+    def _analysis_bound_prediction_chart(self, reference, prediction_run_id, result):
+        """First-party display proof for bound THS inputs; never changes prediction quality."""
+        from lake_equity.data import InputContract
+        from lake_equity.research.prediction_binding import bind_analysis
+        from my_strategy.services.kronos_prediction import VERIFIED_PRICE_SOURCES, prepare_input
+
+        saved = self.bridge.read_report(prediction_run_id)
+        if (saved.get('result_ref') or {}).get('cache_key') != reference:
+            raise ValueError('Prediction report reference mismatch')
+        binding = saved.get('analysis_binding') or {}
+        info = result.get('input') or {}
+        sources = set(info.get('source') or [])
+        if (binding.get('compatible') is not True or 'ths' not in sources or not sources.issubset(VERIFIED_PRICE_SOURCES)
+                or info.get('price_basis') != 'unadjusted' or info.get('volume_unit') != 'shares'
+                or info.get('amount_unit') != 'CNY' or info.get('unverified_trade_price_bars') != 0):
+            return result
+        request = dict(symbol=result['symbol'], end=result['as_of'],
+                       lookback=info['lookback'], horizon=info['horizon'])
+        future = [row['date'] for row in result.get('forecast') or []]
+        calendar = SimpleNamespace(calendar=lambda: (future, result.get('calendar')))
+        try:
+            verified, raw, observed, original = bind_analysis(self.bridge, binding['analysis_run_id'], request,
+                                                            binding.get('input_manifest_id'), calendar)
+            if binding != verified or saved.get('input') != info or observed != info:
+                raise ValueError('Saved analysis and prediction input identities differ')
+            frame, _, _ = prepare_input(raw, future, symbol=request['symbol'], as_of=request['end'],
+                                         lookback=request['lookback'], horizon=request['horizon'])
+            current = InputContract(self.settings.raw_db).validate()
+            if current.manifest_sha256 != original.manifest_sha256 or current.stat_identity != original.stat_identity:
+                raise ValueError('Analysis input changed while its chart was read')
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            return {**result, 'history': [], 'history_verification': {**result['history_verification'],
+                    'status': 'unavailable', 'reason_code': 'analysis_binding_unverified',
+                    'reason': str(error), 'input_sha256_match': False}}
+        history = [{'date': str(day)[:10], **{key: float(row[key]) for key in
+                   ('open', 'high', 'low', 'close', 'volume', 'amount')}} for day, row in frame.iterrows()]
+        return {**result, 'history': history, 'history_verification': {**result['history_verification'],
+                'status': 'verified', 'input_sha256_match': True, 'analysis_binding_verified': True,
+                'display_only_degraded': True, 'reason_code': 'analysis_bound_source_verified',
+                'reason': '原预测与同代际分析尾窗核验一致；仅降级展示，不提升原预测资格'}}

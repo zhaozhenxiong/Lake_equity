@@ -24,6 +24,12 @@ DEFAULT_RISK = dict(top_k=10, max_total_weight=.8, max_stock_weight=.1, rebalanc
 IMPLEMENTATION_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
+class PlanBlocked(ValueError):
+    def __init__(self, details):
+        self.details = details
+        super().__init__('；'.join(row['message'] for row in details.get('issues', [])) or '计划预检未通过')
+
+
 def _now():
     return datetime.now().astimezone().isoformat()
 
@@ -51,12 +57,19 @@ def _hash(value):
 
 
 def _snapshot_input(params):
+    if not isinstance(params, dict):
+        raise ValueError('Account snapshot must be an object')
     allowed = {'as_of', 'cash', 'positions', 'permissions', 'source', 'is_fixture', 'last_rebalance_date', 'note'}
     if set(params) - allowed:
         raise ValueError('Unknown account snapshot fields: ' + ', '.join(sorted(set(params) - allowed)))
     as_of = _day(params.get('as_of'))
+    supplied_positions = params.get('positions', [])
+    if not isinstance(supplied_positions, list):
+        raise ValueError('Account positions must be a list')
     positions, seen = [], set()
-    for supplied in params.get('positions', []):
+    for supplied in supplied_positions:
+        if not isinstance(supplied, dict):
+            raise ValueError('Each account position must be an object')
         if set(supplied) - {'symbol', 'total_shares', 'sellable_shares', 'average_cost', 'buy_lots', 'buy_date', 'frozen_shares'}:
             raise ValueError('Unknown position fields')
         symbol = _symbol(supplied.get('symbol'))
@@ -68,8 +81,13 @@ def _snapshot_input(params):
         frozen = _integer(supplied.get('frozen_shares', 0), 'frozen_shares')
         if sellable + frozen > total:
             raise ValueError('Sellable and frozen shares exceed total shares')
+        supplied_lots = supplied.get('buy_lots', [])
+        if not isinstance(supplied_lots, list):
+            raise ValueError('Position buy_lots must be a list')
         lots = []
-        for lot in supplied.get('buy_lots', []):
+        for lot in supplied_lots:
+            if not isinstance(lot, dict):
+                raise ValueError('Each buy lot must be an object')
             if set(lot) - {'date', 'shares'}:
                 raise ValueError('Unknown buy lot fields')
             day, quantity = _day(lot.get('date')), _integer(lot.get('shares'), 'lot shares')
@@ -95,6 +113,8 @@ def _snapshot_input(params):
         if total:
             positions.append(position)
     permissions = params.get('permissions', {})
+    if not isinstance(permissions, dict):
+        raise ValueError('Account permissions must be an object')
     if set(permissions) - {'star', 'chinext', 'risk_warning'} or any(not isinstance(value, bool) for value in permissions.values()):
         raise ValueError('Permissions must be explicit star/chinext/risk_warning booleans')
     if not isinstance(params.get('is_fixture', False), bool):
@@ -119,6 +139,27 @@ def _fees(side, quantity, price, day, risk):
     commission = max(risk['min_commission'], notional * risk['commission']) if quantity else 0.
     stamp = (.0005 if day >= '2023-08-28' else .001) if side == 'SELL' else 0.
     return commission + notional * (risk['transfer_fee'] + stamp)
+
+
+def _risk_config(selection, overrides=None):
+    if overrides is not None and not isinstance(overrides, dict):
+        raise ValueError('Risk parameters must be an object')
+    params = {'risk': overrides or {}}
+    release_risk = (selection.get('release_identity') or {}).get('risk') or {}
+    risk = {**DEFAULT_RISK, **{key: value for key, value in release_risk.items() if key in DEFAULT_RISK}, **params.get('risk', {})}
+    if 'max_volume_fraction' in release_risk and 'max_volume_participation' not in params.get('risk', {}):
+        risk['max_volume_participation'] = release_risk['max_volume_fraction']
+    if set(risk) - set(DEFAULT_RISK):
+        raise ValueError('Unknown risk parameters')
+    for key in ('top_k', 'rebalance_sessions'):
+        _integer(risk[key], key)
+        if risk[key] < 1:
+            raise ValueError(key + ' must be positive')
+    for key in set(DEFAULT_RISK) - {'top_k', 'rebalance_sessions'}:
+        risk[key] = _number(risk[key], key)
+    if not 0 < risk['max_stock_weight'] <= risk['max_total_weight'] <= 1 or not 0 < risk['max_volume_participation'] <= 1:
+        raise ValueError('Invalid portfolio weight or participation caps')
+    return risk
 
 
 class TradingService:
@@ -226,52 +267,129 @@ class TradingService:
     def read_plan(self, plan_id):
         return self._read(plan_id, 'plans')
 
-    def build_plan(self, params):
-        allowed = {'account_id', 'snapshot_id', 'fusion_id', 'release_id', 'risk'}
+    def _plan_context(self, params):
+        from .selection import SelectionService, identity, selection_policy, temporal_state, rebalance_state, verified_policy_exit
+        allowed = {'account_id', 'snapshot_id', 'fusion_id', 'source_id', 'source_kind', 'source_sha256', 'release_id', 'risk'}
         if set(params) - allowed:
             raise ValueError('Unknown trading plan parameters')
+        source_id = params.get('source_id') or params.get('fusion_id')
+        if params.get('source_id') and params.get('fusion_id') and params['source_id'] != params['fusion_id']:
+            raise ValueError('Conflicting selection identities')
+        reader = SelectionService(self.root)
         account = self.read_account(params.get('account_id'))
         snapshot = self.read_snapshot(params.get('snapshot_id') or account['latest_snapshot_id'])
+        original = reader.read(source_id)
+        selection = reader.with_model_time(original)
+        source_sha = identity(original)
+        kind = 'model_scan_v1' if source_id.startswith('scan-') else 'fusion_scan_v1'
+        selection.setdefault('family', kind)
+        issues = []
+        def issue(code, message):
+            issues.append(dict(code=code, message=message))
         if snapshot['account_id'] != account['account_id'] or snapshot['snapshot_id'] != account['latest_snapshot_id']:
-            raise ValueError('Trading plan requires the latest snapshot for this account')
-        fusion = FusionService(self.root).read_run(params.get('fusion_id'))
-        if not fusion['final_ranking']:
-            raise ValueError('Conditional plans require a complete selection ranking; resume Kronos first')
-        if params.get('release_id') and params['release_id'] != fusion.get('release_id'):
-            raise ValueError('Plan release differs from the frozen fusion release')
-        if snapshot['as_of'] > fusion['as_of']:
-            raise ValueError('Account snapshot contains information after the signal date')
-        if snapshot['as_of'] != fusion['as_of']:
-            raise ValueError('Reconcile the account snapshot on the signal date before planning')
+            issue('snapshot_not_latest', '账户已更新，请读取该账户的最新快照后重新预检')
+        if params.get('source_kind') and params['source_kind'] != kind:
+            issue('source_kind_mismatch', '扫描来源类型与保存报告不一致')
+        if params.get('source_sha256') and params['source_sha256'] != source_sha:
+            issue('source_changed', '选股报告已更新，请重新核对来源和预检')
+        if not selection.get('final_ranking'):
+            issue('ranking_incomplete', '排名尚未完整冻结，请先完成本次选股')
+        if params.get('release_id') and params['release_id'] != selection.get('release_id'):
+            issue('release_mismatch', '计划与所选报告的冻结策略版本不一致')
+        if snapshot['as_of'] != selection['as_of']:
+            issue('account_signal_date_mismatch', f"账户快照为 {snapshot['as_of']}，选股信号为 {selection['as_of']}，须核对同日快照和信号，不能倒填或混用日期")
+        policy = selection_policy(selection)
+        try:
+            actual_risk = _risk_config(selection, params.get('risk'))
+            policy.update(decision_top_k=actual_risk['top_k'], rebalance_sessions=actual_risk['rebalance_sessions'], max_total_weight=actual_risk['max_total_weight'], max_stock_weight=actual_risk['max_stock_weight'])
+        except ValueError as error:
+            issue('risk_parameters_invalid', str(error))
+        if not (selection.get('release_identity') or {}).get('risk', {}).get('top_k'):
+            issue('release_policy_missing', '该报告未绑定冻结的持仓策略，只能查看模型评分')
+        next_session, recent = reader.calendar(selection)
+        selection['next_session'] = next_session
+        selection['market_evidence'] = {**selection.get('market_evidence', {}), 'calendar_recent': recent}
+        last_rebalance = snapshot.get('last_rebalance_date')
+        due,calendar_reason=rebalance_state(selection['as_of'],last_rebalance,recent,policy['rebalance_sessions'])
+        if calendar_reason:
+            try:
+                _, recent = reader.calendar(selection, full=True)
+                selection['market_evidence']['calendar_recent'] = recent
+            except (ValueError, KeyError, OSError):
+                issue('rebalance_calendar_missing', '原数据代际缺少足够调仓日历，不能推断尚未到期')
+        due,calendar_reason=rebalance_state(selection['as_of'],last_rebalance,recent,policy['rebalance_sessions'])
+        if calendar_reason:
+            issue(calendar_reason, '原日历窗口不足以核验调仓周期，请补足同代际日历后重试')
+        temporal = temporal_state(selection, next_session)
+        if not temporal['actionable']:
+            issue('signal_not_current', temporal['reason'])
+        rows = {row['symbol']: dict(row) for row in selection['rows']}
+        positions = {row['symbol']: row for row in snapshot['positions']}
+        if set(positions) - set(rows):
+            issue('holdings_not_reviewed', '选股范围未包含所有当前持仓；不能把未复核持仓当成排名落后')
+        # Stop on identity/date failures before loading price history.
+        if not issues:
+            from .selection import ranked_candidates
+            required = set(positions) | {row['symbol'] for row in ranked_candidates(selection)[:policy['decision_top_k']]}
+            quotes = reader.quotes(selection, required)
+            for symbol in required:
+                if symbol in rows:
+                    rows[symbol].update(quotes.get(symbol, {}))
+            missing = [symbol for symbol in positions if not rows[symbol].get('reference_close') or rows[symbol].get('quote_usable') is False]
+            if missing:
+                issue('holding_valuation_missing', '持仓参考价格未通过核验，不能据此计算目标仓位')
+            unscored = [symbol for symbol in positions if rows[symbol].get('baseline_status', rows[symbol].get('status', 'scored')) in {'missing','failed','unprocessed'}]
+            unscored += [symbol for symbol in positions if rows[symbol].get('baseline_status', rows[symbol].get('status'))=='excluded'
+                         and not verified_policy_exit(rows[symbol], rows[symbol])]
+            if unscored:
+                issue('holding_score_unavailable', '部分持仓未取得有效评分，不能将缺失解释为退出信号')
+        if kind == 'model_scan_v1':
+            for row in rows.values():
+                row.update(selection_eligible=row.get('status')=='scored', selection_rank=row.get('rank'), kronos_status='not_run')
+        else:
+            for row in rows.values():
+                row['selection_rank'] = row.get('fused_rank')
+        selection['rows'] = list(rows.values())
+        latest = None
+        try:
+            from .selection import latest_published_day
+            latest = latest_published_day(self.root)
+        except (OSError, ValueError, KeyError):
+            pass
+        result = dict(schema='plan_preflight_v1', status='blocked' if issues else 'ready', issues=issues,
+            dates=dict(snapshot_as_of=snapshot['as_of'], signal_date=selection['as_of'], execution_date=next_session, latest_published_day=latest),
+            identity=dict(account_id=account['account_id'], snapshot_id=snapshot['snapshot_id'], source_id=source_id,
+                          source_kind=kind, source_sha256=source_sha, release_id=selection.get('release_id')),
+            next_actions=([dict(code='select_same_day_source',label='选择同日且仍有效的完整信号'),
+                           dict(code='review_account',label='核对真实账户快照；同日数据未发布时等待齐备')] if issues else []),
+            decision_policy=policy, temporal=temporal)
+        return result, selection, account, snapshot
+
+    def preflight(self, params):
+        result, _, _, _ = self._plan_context(params)
+        return result
+
+    def build_plan(self, params):
+        from .selection import SelectionService, identity as selection_identity
+        checked, fusion, account, snapshot = self._plan_context(params)
+        if checked['status'] != 'ready':
+            raise PlanBlocked(checked)
         execution_day = _day(fusion['next_session'])
-        if execution_day <= fusion['as_of']:
-            raise ValueError('Execution must follow the signal session')
-        release_risk = fusion['release_identity'].get('risk') or {}
-        risk = {**DEFAULT_RISK, **{key: value for key, value in release_risk.items() if key in DEFAULT_RISK}, **params.get('risk', {})}
-        if 'max_volume_fraction' in release_risk and 'max_volume_participation' not in params.get('risk', {}):
-            risk['max_volume_participation'] = release_risk['max_volume_fraction']
-        if set(risk) - set(DEFAULT_RISK):
-            raise ValueError('Unknown risk parameters')
-        for key in ('top_k', 'rebalance_sessions'):
-            _integer(risk[key], key)
-            if risk[key] < 1:
-                raise ValueError(key + ' must be positive')
-        for key in set(DEFAULT_RISK) - {'top_k', 'rebalance_sessions'}:
-            risk[key] = _number(risk[key], key)
-        if not 0 < risk['max_stock_weight'] <= risk['max_total_weight'] <= 1 or not 0 < risk['max_volume_participation'] <= 1:
-            raise ValueError('Invalid portfolio weight or participation caps')
+        risk = _risk_config(fusion, params.get('risk'))
         rows = {row['symbol']: row for row in fusion['rows']}
         positions = {row['symbol']: row for row in snapshot['positions']}
         if set(positions) - set(rows):
             raise ValueError('Fusion must include every current holding, including stocks outside the candidate pool')
         missing_marks = [symbol for symbol in positions if not rows[symbol].get('reference_close')]
         equity = snapshot['cash'] + sum(position['total_shares'] * (rows[symbol].get('reference_close') or 0) for symbol, position in positions.items())
-        selected = sorted((row for row in rows.values() if row['selection_eligible']), key=lambda row: row['fused_rank'])[:risk['top_k']]
+        selected = sorted((row for row in rows.values() if row['selection_eligible']), key=lambda row: (row['selection_rank'], row['symbol']))[:risk['top_k']]
         targets = {row['symbol']: min(risk['max_stock_weight'], risk['max_total_weight'] / max(1, len(selected))) for row in selected}
         recent = fusion.get('market_evidence', {}).get('calendar_recent', [])
         last_rebalance = snapshot.get('last_rebalance_date')
-        since = sum(last_rebalance < day <= fusion['as_of'] for day in recent) if last_rebalance else risk['rebalance_sessions']
-        rebalance_due = not last_rebalance or since >= risk['rebalance_sessions']
+        from .selection import rebalance_state
+        rebalance_due, calendar_reason = rebalance_state(fusion['as_of'], last_rebalance, recent, risk['rebalance_sessions'])
+        if calendar_reason:
+            raise PlanBlocked({**checked,'status':'blocked','issues':[dict(code=calendar_reason,message='原日历不足以核验调仓周期')]})
         orders, holds, sale_proceeds, cash_reserved = [], [], 0., 0.
         sale_notional = buy_notional = 0.
         invested = equity - snapshot['cash']
@@ -285,6 +403,9 @@ class TradingService:
             position = positions.get(symbol, dict(total_shares=0, sellable_shares=0, frozen_shares=0, buy_lots=[]))
             current = position['total_shares']
             close = row.get('reference_close')
+            if row.get('quote_usable') is False:
+                holds.append(dict(symbol=symbol,action='HOLD' if current else 'WAIT',reason=row.get('quote_reason') or 'quote_unusable',total_shares=current))
+                continue
             if not close or missing_marks:
                 holds.append(dict(symbol=symbol, action='WAIT', reason='missing_holding_valuation' if missing_marks else 'missing_reference_close', total_shares=current))
                 continue
@@ -361,7 +482,10 @@ class TradingService:
         # Process actual sales before buys; input symbol sorting must not imply sell proceeds are already cash.
         orders.sort(key=lambda row: (row['side'] == 'BUY', row['symbol']))
         plan = dict(schema='conditional_research_plan_v1', kind='trade_plan', plan_id=identity, account_id=account['account_id'],
-                    snapshot_id=snapshot['snapshot_id'], snapshot_sha256=_hash(snapshot), fusion_id=fusion['run_id'], fusion_sha256=_hash(fusion),
+                    snapshot_id=snapshot['snapshot_id'], snapshot_sha256=_hash(snapshot),
+                    source_id=checked['identity']['source_id'], source_kind=checked['identity']['source_kind'], source_sha256=checked['identity']['source_sha256'],
+                    fusion_id=fusion['run_id'] if checked['identity']['source_kind']=='fusion_scan_v1' else None,
+                    fusion_sha256=checked['identity']['source_sha256'] if checked['identity']['source_kind']=='fusion_scan_v1' else None,
                     release_id=fusion.get('release_id'), release_identity=fusion['release_identity'], model_id=fusion['model_id'],
                     read_ref=fusion['read_ref'], signal_date=fusion['as_of'], execution_date=execution_day, created_at=_now(),
                     is_fixture=account['is_fixture'], risk=risk, rebalance_due=rebalance_due, account_equity_reference=equity if not missing_marks else None,
@@ -373,6 +497,15 @@ class TradingService:
                                  'No future open/high/low/volume is used to construct this plan.',
                                  'Sale-dependent buys require confirmed proceeds; actual fills and fees must be reconciled.'])
         with closing(self._connect()) as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            latest = conn.execute('SELECT latest_snapshot FROM accounts WHERE id=?', (account['account_id'],)).fetchone()
+            current_source = SelectionService(self.root).read(checked['identity']['source_id'])
+            if not latest or latest[0] != snapshot['snapshot_id'] or selection_identity(current_source) != checked['identity']['source_sha256']:
+                failure = {**checked, 'status':'blocked', 'issues':[dict(code='plan_identity_changed',message='账户或选股来源在构建期间已更新，请重新预检')]}
+                raise PlanBlocked(failure)
+            from .selection import temporal_state
+            if not temporal_state(fusion, fusion['next_session'])['actionable']:
+                raise PlanBlocked({**checked, 'status':'blocked', 'issues':[dict(code='signal_not_current',message='原执行窗口在等待保存期间已结束，请重新核对有效信号')]})
             conn.execute('INSERT INTO plans VALUES(?,?,?,?)', (identity, account['account_id'], canonical(plan), _hash(plan)))
             conn.commit()
         return plan

@@ -69,7 +69,7 @@ function boot(){
 
   async function connection(){
     const state=document.getElementById('connection-state');
-    try{await api.overview();state.className='connection online';state.innerHTML='<i></i>本地服务已连接';}
+    try{await api.health();state.className='connection online';state.innerHTML='<i></i>本地服务已连接';}
     catch(error){state.className='connection offline';state.innerHTML='<i></i>服务未连接';state.title=error.message;}
   }
 

@@ -1,5 +1,5 @@
 import {api} from '../core/api.js';
-import {arrayOf,busy,coverageTiers,dateTime,empty,escapeHtml,heading,notify,number,routeLink,showError,statusLabel,today} from '../core/ui.js';
+import {arrayOf,busy,coverageTiers,dateTime,empty,escapeHtml,heading,notify,number,routeLink,showError,statusLabel} from '../core/ui.js';
 import {defaultMethodIdentity} from '../core/models.js';
 import {submitJob} from '../core/jobs.js';
 import {bindReportLinks,reportList} from '../core/reports.js';
@@ -148,7 +148,7 @@ export async function mount(host,{signal}){
 
   async function preview(button){
     try{
-      const value=await busy(button,()=>api.pipelinePreview({end:today(),packs:'full',refit:'auto'},signal),'预检中…');
+      const value=await busy(button,()=>api.pipelinePreview({packs:'full',refit:'auto'},signal),'预检中…');
       if(signal.aborted)return;
       lastPreview=value;
       renderPreview(host,value);

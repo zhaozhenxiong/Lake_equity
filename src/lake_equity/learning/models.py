@@ -144,7 +144,20 @@ def fit_predict(train, valid, test, columns, *, model_type, backend, seed, direc
             details['native_feature_names'] = lgb.Booster(model_file=str(directory / native)).feature_name()
     details.update(feature_count=len(columns), preprocessing=state, backend=backend, model_type=model_type,
                    preprocessing_sha256=hashlib.sha256((directory / 'preprocessing.json').read_bytes()).hexdigest())
+    if backend == 'qlib' and model_type != 'mlp':
+        details['worker_exchange_retention'] = dict(
+            policy='ephemeral_after_verified_delivery_v1',
+            removed=['train.parquet', 'valid.parquet', 'test.parquet'],
+            retained=['scores.parquet', 'request.json', 'worker.log'],
+            original_exchange_archived=False)
     (directory / 'model.json').write_text(json.dumps(details, indent=2, allow_nan=False), encoding='utf-8')
+    if backend == 'qlib' and model_type != 'mlp':
+        # Only a successful, loadable delivery retires these newly created
+        # exchanges. Failed/cancelled workers retain their recovery inputs.
+        load_saved(directory)
+        check_stop(check_cancel)
+        for name in details['worker_exchange_retention']['removed']:
+            (directory / name).unlink()
     return scores, details
 
 
@@ -226,6 +239,48 @@ def load_saved(directory, *, device='cpu'):
 def predict_saved(directory, frame, *, device='cpu'):
     """Load frozen model parameters and transform/predict without fitting."""
     return load_saved(directory, device=device)(frame)
+
+
+def explain_saved(directory, frame, *, scores=None, feature_groups=None):
+    """Explain the saved Ridge output; unsupported estimators never get invented attribution."""
+    directory = Path(directory)
+    details = json.loads((directory / 'model.json').read_text(encoding='utf-8'))
+    if details.get('model_type') != 'ridge':
+        return dict(status='unsupported', capability='unsupported', schema=None, rows=[],
+                    reason='model_type_has_no_verified_local_contribution')
+    predicted = load_saved(directory)(frame)
+    expected = predicted if scores is None else np.asarray(scores, dtype=float)
+    if expected.shape != predicted.shape or not np.isfinite(expected).all() or not np.allclose(
+            expected, predicted, rtol=1e-10, atol=1e-12):
+        raise ValueError('Explanation score differs from the original frozen score')
+    state = details['preprocessing']
+    columns = state['columns']
+    raw = frame[columns].to_numpy(dtype=float)
+    z = _apply_saved_preprocessing(frame, state)
+    coefficients = np.asarray(details['coefficients'], dtype=float)
+    contributions = z * coefficients
+    rows = []
+    for index, record in enumerate(frame.to_dict('records')):
+        features = []
+        for position, name in enumerate(columns):
+            value = raw[index, position]
+            imputed = not np.isfinite(value)
+            filled = state['median'][name] if imputed else float(value)
+            group = next((group for group, members in (feature_groups or {}).items() if name in members), None)
+            features.append(dict(name=name, label=name, group=group,
+                raw_value=None if imputed else float(value), imputed=bool(imputed), filled_value=float(filled),
+                clipped_value=float(np.clip(filled, state['low'][name], state['high'][name])),
+                standardized_value=float(z[index, position]), coefficient=float(coefficients[position]),
+                contribution=float(contributions[index, position])))
+        reconstructed = float(details['intercept'] + contributions[index].sum())
+        summary = {key: [dict(name=item['name'], contribution=item['contribution']) for item in sorted(
+            (item for item in features if item['contribution'] * sign > 0),
+            key=lambda item: (-sign * item['contribution'], item['name']))[:2]]
+            for key, sign in [('positive', 1), ('negative', -1)]}
+        rows.append(dict(symbol=record.get('symbol'), score=float(expected[index]), intercept=float(details['intercept']),
+            reconstructed_score=reconstructed, reconstruction_error=abs(float(expected[index]) - reconstructed),
+            features=features, summary=summary))
+    return dict(status='supported', capability='exact_additive', schema='ridge_local_contributions_v1', rows=rows)
 
 
 def signal_metrics(predictions):

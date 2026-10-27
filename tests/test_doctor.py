@@ -34,6 +34,20 @@ def test_doctor_is_ok_only_when_runtime_assets_and_database_check_pass(healthy_r
     assert result["checks"]["raw_database"]["quick_check"] == "ok"
 
 
+def test_doctor_reports_editable_install_version_drift(healthy_runtime, monkeypatch):
+    import lake_equity.cli
+    from lake_equity import __version__
+
+    (healthy_runtime.root / 'pyproject.toml').write_text(f'[project]\nversion="{__version__}"\n', encoding='utf-8')
+    monkeypatch.setattr(lake_equity.cli.importlib.metadata, 'version', lambda package: '0.1.0')
+    drift = doctor(healthy_runtime)
+    assert drift['status'] == 'partial'
+    assert drift['checks']['package_identity']['available'] is False
+    assert drift['checks']['package_identity']['installed_version'] == '0.1.0'
+    monkeypatch.setattr(lake_equity.cli.importlib.metadata, 'version', lambda package: __version__)
+    assert doctor(healthy_runtime)['checks']['package_identity']['available'] is True
+
+
 @pytest.mark.parametrize("assets", [
     {"ready": False, "missing": ["model.safetensors"], "errors": []},
     {"missing": ["model.safetensors"], "errors": []},

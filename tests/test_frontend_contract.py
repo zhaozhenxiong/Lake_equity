@@ -195,10 +195,11 @@ def test_feature_panel_uses_all_declared_features_and_keeps_missing_values_visib
     run_module(r"""
 import assert from 'node:assert/strict';
 import {mount} from './pages/analysis.js';
-function element(){return {value:'',textContent:'读取特征',innerHTML:'',isConnected:true,hidden:false,listeners:new Map(),addEventListener(kind,callback){this.listeners.set(kind,callback);},removeEventListener(){},setAttribute(){},after(){},replaceChildren(){this.innerHTML='';},querySelector(){return element();}};}
+function element(){return {value:'',textContent:'读取特征',innerHTML:'',isConnected:true,hidden:false,listeners:new Map(),addEventListener(kind,callback){this.listeners.set(kind,callback);},removeEventListener(){},setAttribute(){},after(){},before(){},replaceChildren(){this.innerHTML='';},querySelector(){return element();},querySelectorAll(){return [];}};}
 const nodes=new Map();
 const host={...element(),querySelector(selector){if(!nodes.has(selector))nodes.set(selector,element());return nodes.get(selector);},querySelectorAll(){return [];}};
 globalThis.document={createElement:element};
+globalThis.FormData=class{get(){return '';}};
 globalThis.cancelAnimationFrame=()=>{};
 const featureColumns=Array.from({length:20},(_,index)=>`feature_${String(index).padStart(2,'0')}`);
 const raw={open:10,high:12,low:9,close:11,volume:100,amount:1000,ma5:10,ma10:10,ma20:10,ma60:10};

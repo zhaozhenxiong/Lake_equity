@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -8,7 +9,33 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import tomllib
 import venv
+
+
+def source_version(root: Path) -> str:
+    expected = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    tree = ast.parse((root / "src/lake_equity/__init__.py").read_text(encoding="utf-8"))
+    package_version = next((ast.literal_eval(node.value) for node in tree.body
+                            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__"
+                                                                     for target in node.targets)), None)
+    if package_version != expected:
+        raise ValueError("Source package version differs from pyproject.toml")
+    release = root / "release-manifest.json"
+    if release.is_file() and json.loads(release.read_text(encoding="utf-8")).get("version") != expected:
+        raise ValueError("Release manifest version differs from pyproject.toml")
+    return expected
+
+
+def verify_runtime_version(python: Path, root: Path, expected: str) -> dict:
+    command = ("import sys;sys.path.insert(0,sys.argv[1]);"
+               "import importlib.metadata,json,lake_equity;"
+               "print(json.dumps({'installed':importlib.metadata.version('lake-equity'),'package':lake_equity.__version__}))")
+    result = subprocess.run([str(python), "-c", command, str(root / 'src')], check=True, cwd=root, capture_output=True, text=True)
+    observed = json.loads(result.stdout)
+    if observed.get("installed") != expected or observed.get("package") != expected:
+        raise ValueError(f"Installed runtime version mismatch: expected {expected}, observed {observed}; reinstall this source with the target interpreter")
+    return {"expected": expected, **observed}
 
 
 def main():
@@ -23,6 +50,7 @@ def main():
     if suffix is None:
         parser.error("No bundled native wheel for this interpreter architecture; this release is validated on Windows x64.")
     root = Path(__file__).resolve().parent
+    expected_version = source_version(root)
     environment = root / ".venv"
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not python.exists():
@@ -43,6 +71,12 @@ def main():
     subprocess.run([str(python), "-m", "pip", "install", "--force-reinstall", "--no-deps", str(wheel)], check=True, cwd=root)
     for package in (root / "vendor/cnequity", root):
         subprocess.run([str(python), "-m", "pip", "install", "--no-deps", "-e", str(package)], check=True, cwd=root)
+    # PEP 660 can build metadata in a temporary directory, leaving an older
+    # source egg-info to shadow dist-info when run.py prepends src to sys.path.
+    subprocess.run([str(python), "-c", "from setuptools import setup;setup(script_args=['egg_info'])"],
+                   check=True, cwd=root)
+    identity = verify_runtime_version(python, root, expected_version)
+    print(json.dumps({"runtime_version": identity}))
     config = root / "configs/cnequity.toml"
     if not config.exists():
         subprocess.run([str(python), "-m", "cnequity", "config", "create", "--config", str(config), "--data-root", str(root / "var/lake")], check=True, cwd=root)

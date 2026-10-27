@@ -10,8 +10,6 @@ import os
 from pathlib import Path
 from typing import Literal
 import sqlite3
-import subprocess
-import sys
 import threading
 import time
 from urllib.parse import urlsplit
@@ -23,7 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from filelock import FileLock, Timeout
 
-from lake_equity.jobs import JobCancelled, JobManager
+from lake_equity.jobs import ACTIVE, JobCancelled, JobManager
+from lake_equity import __version__
 from lake_equity.report_views import learning_dashboard_view
 from lake_equity.settings import Settings
 
@@ -40,13 +39,19 @@ class WatchRequest(BaseModel):
 
 
 def _frontend_version(root: Path) -> str:
-    """Content-free build identity for the static workbench modules."""
+    """Deterministic content identity for the workbench's own static modules."""
     files = sorted(
-        (path.relative_to(root).as_posix(), path.stat().st_size, path.stat().st_mtime_ns)
+        path
         for path in (root / "frontend").rglob("*")
         if path.is_file() and path.suffix in {".js", ".css", ".html"} and "vendor" not in path.parts
     )
-    return hashlib.sha256("\n".join(f"{name}|{size}|{stamp}" for name, size, stamp in files).encode()).hexdigest()[:16]
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            digest.update(hashlib.file_digest(handle, "sha256").digest())
+    return digest.hexdigest()[:16]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -105,6 +110,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from lake_equity.learning.forward import ForwardLedger
         return ForwardLedger(settings.root)
 
+    def replays():
+        from lake_equity.learning.kronos_replay import KronosReplayService
+        return KronosReplayService(settings.root)
+
+    def storage_usage():
+        from lake_equity.storage_usage import StorageUsageService
+        return StorageUsageService(settings.root)
+
+    def selections():
+        from lake_equity.learning.selection import SelectionService
+        return SelectionService(settings.root)
+
+    def explanations():
+        from lake_equity.learning.scan_explanations import ScanExplanationService
+        return ScanExplanationService(settings.root)
+
+    def retention():
+        from lake_equity.learning.retention import LearningRetentionService
+        return LearningRetentionService(settings.root,gate=operations.gate,
+            busy=lambda:operations.external_busy() or any(row.get('status') in ACTIVE
+                for row in operations.ops.list_jobs(100)))
+
+    def explanation_source(identity):
+        source = selections().read(identity)
+        if identity.startswith('scan-'):
+            return identity, source
+        baseline = selections().read(source.get('scan_id'))
+        if any(source.get(key) != baseline.get(key) for key in ('model_id','read_ref','as_of')):
+            raise ValueError('Fusion explanation differs from its frozen factor scan')
+        return baseline['run_id'], source
+
     def with_input(params):
         requested = dict(params)
         binding = input_contract.validate()
@@ -112,61 +148,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return requested
 
     def run_daily(progress, cancelled):
-        config_path = settings.root / "configs/cnequity.toml"
-        if not config_path.is_file():
-            raise ValueError("缺少 configs/cnequity.toml；请先完成本地导入与配置")
-        path = settings.root / "var/logs/cne-daily.log"
-        command = [sys.executable, "-m", "cnequity", "run", "daily", "--config", str(config_path)]
-        with path.open("a", encoding="utf-8") as output:
-            start_offset = output.tell()
-            process = subprocess.Popen(command, cwd=settings.root, stdout=output, stderr=subprocess.STDOUT,
-                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-            while process.poll() is None:
-                if cancelled():
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                    raise JobCancelled("日更已取消，已发布批次保留")
-                progress({"phase": "cne_daily", "pid": process.pid, "log": path.name})
-                time.sleep(1)
-        if process.returncode:
-            raise RuntimeError(f"CNEquity 日更失败（退出码 {process.returncode}）：" + path.read_text(encoding="utf-8", errors="replace")[-5000:])
-        with path.open(encoding="utf-8", errors="replace") as output:
-            output.seek(start_offset)
-            logged = output.read()
-        decoder = json.JSONDecoder()
-        outcomes = []
+        from lake_equity.pipeline import run_data_update
 
-        def inspect_outcome(value):
-            if isinstance(value, dict):
-                if "execution_status" in value or "coverage_status" in value or ("run_id" in value and "status" in value):
-                    outcomes.append(value)
-                for child in value.values():
-                    if isinstance(child, (dict, list)):
-                        inspect_outcome(child)
-            elif isinstance(value, list):
-                for child in value:
-                    inspect_outcome(child)
-
-        offset = 0
-        while offset < len(logged):
-            offset = logged.find("{", offset)
-            if offset < 0:
-                break
-            try:
-                value, length = decoder.raw_decode(logged[offset:])
-                inspect_outcome(value)
-                offset += length
-            except json.JSONDecodeError:
-                offset += 1
-        partial = not outcomes or any(str(value.get(field, "")).lower() in {"warning", "degraded", "partial", "pending", "unknown", "failed", "blocked", "incomplete"}
-                                      for value in outcomes for field in ("status", "execution_status", "coverage_status", "publication_status"))
+        update = run_data_update(settings, lake, {}, progress=progress, cancelled=cancelled)
+        if update["exit_code"]:
+            raise RuntimeError(f"CNEquity 日更失败（退出码 {update['exit_code']}）：" + update["log_tail"])
         materialized = lake.materialize_legacy(progress=progress, check_cancel=cancelled)
-        return {"status": "partial" if partial else "complete", "cne_outcomes": outcomes, "materialize": materialized,
-                "manifest_id": materialized.get("manifest_id"), "outcome_assessed": bool(outcomes), "log": path.name}
+        return {"status": "partial" if update["degraded"] else "complete",
+                "cne_outcomes": update["outcomes"], "materialize": materialized,
+                "manifest_id": materialized.get("manifest_id"),
+                "outcome_assessed": update["outcome_assessed"], "log": Path(update["log"]).name}
 
     def dispatch_unlocked(kind, params, progress, cancelled):
         def check_cancel():
@@ -187,9 +178,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return learning_dashboard_view(result)
         if kind == 'fusion_scan':
             return fusion().run(params, progress=progress, check_cancel=check_cancel)
+        if kind == 'kronos_replay':
+            spec = dict(params)
+            resume_id = spec.pop('resume_id', None)
+            if resume_id:
+                return replays().resume(resume_id, spec, progress=progress, check_cancel=check_cancel)
+            return replays().run(spec, progress=progress, check_cancel=check_cancel)
+        if kind == 'storage_usage':
+            return storage_usage().refresh(params, progress=progress, check_cancel=check_cancel)
         if kind == 'trade_plan':
             check_cancel()
             return trading().build_plan(params)
+        if kind == 'scan_explanation':
+            if set(params) != {'run_id'}:
+                raise ValueError('Scan explanation requires only the saved run_id')
+            baseline_id, _ = explanation_source(params['run_id'])
+            return explanations().build(baseline_id, progress=progress, check_cancel=check_cancel)
 
         if kind == "factor_training":
             check_cancel()
@@ -236,7 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def dispatch_research(kind, params, progress, check_cancel):
         spec = with_input(params)
         if kind == "prediction":
-            return research.predict(spec)
+            return research.predict(spec, check_cancel=check_cancel)
         if kind == "analysis":
             return research.analyze(spec)
         if kind == "board_features":
@@ -246,10 +250,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raise ValueError("不支持的任务类型")
 
     def dispatch(kind, params, progress, cancelled):
+        if kind=='learning_retention':
+            return retention().execute(params['plan_id'],params['confirmation_token'],params['object_ids'],
+                confirmed=params.get('confirmed'),maintenance_confirmed=params.get('maintenance_confirmed'),
+                progress=progress,check_cancel=cancelled)
         if not operations.gate.enter():
             raise ValueError("Storage maintenance is active; submit after it finishes")
         try:
-            if kind in {'research_study', 'factor_training', 'model_refit', 'fusion_scan', 'prediction', 'scan', 'backtest', 'pipeline'}:
+            if kind in {'research_study', 'factor_training', 'model_refit', 'fusion_scan', 'prediction', 'scan', 'backtest', 'pipeline', 'kronos_replay', 'scan_explanation'}:
                 path = settings.root / 'var/learning/compute.lock'
                 path.parent.mkdir(parents=True, exist_ok=True)
                 lease = FileLock(str(path))
@@ -273,7 +281,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operations.gate.leave()
 
     jobs = JobManager(settings.root / "var/jobs", dispatch)
-    operations.active_jobs = lambda: any(row["status"] in {"queued", "running", "cancelling"} for row in jobs.list())
+    operations.active_jobs = lambda: any(row["status"] in {"queued", "running", "cancelling"} for row in jobs.list(None))
 
     def chronological(row):
         try:
@@ -284,19 +292,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError:
             return 0
 
+    def page(items, key, limit, offset, query, status, kind):
+        statuses = {value.strip() for value in status.split(',') if value.strip()}
+        kinds = {'training': {'training', 'factor_training'}, 'backtest': {'backtest', 'simulation'}}.get(kind, {kind})
+        needle = query.strip().casefold()
+        selected = [row for row in items
+                    if (not statuses or row.get('status') in statuses)
+                    and (not kind or row.get('kind') in kinds)
+                    and (not needle or needle in json.dumps(row, ensure_ascii=False, default=str).casefold())]
+        selected.sort(key=lambda row: (chronological(row), str(row.get('id', row.get('run_id', '')))), reverse=True)
+        return {key: selected[offset:offset + limit], 'total': len(selected), 'offset': offset,
+                'limit': limit, 'has_more': offset + limit < len(selected)}
+
     @asynccontextmanager
     async def lifespan(app):
         yield
         await asyncio.to_thread(jobs.close)
         await asyncio.to_thread(research.close)
 
-    app = FastAPI(title="LakeEquity 研究工作台", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="LakeEquity 研究工作台", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.jobs = jobs
     from lake_equity.market.routes import create_market_router
 
     app.include_router(create_market_router(settings.root))
     app.include_router(create_operations_router(operations))
+    from lake_equity.operations import create_learning_retention_router
+    app.include_router(create_learning_retention_router(retention(),jobs))
+    from lake_equity.storage_usage import create_storage_usage_router
+    app.include_router(create_storage_usage_router(storage_usage(), jobs.submit))
     app.state.lake = lake
     app.state.research = research
     app.state.history = history
@@ -314,7 +338,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         origin = request.headers.get("origin")
         if request.method not in {"GET", "HEAD", "OPTIONS"} and origin and urlsplit(origin).netloc != request.headers.get("host"):
             return JSONResponse({"detail": "拒绝跨来源写请求"}, status_code=403)
-        gated = request.url.path.startswith("/api/v1/") and not request.url.path.startswith("/api/v1/data/storage")
+        gated = request.url.path.startswith("/api/v1/") and not request.url.path.startswith((
+            "/api/v1/data/storage", "/api/v1/data/learning-retention"))
         if gated and not operations.gate.enter():
             return JSONResponse({"detail": "Storage maintenance is active; retry after it finishes"}, status_code=409)
         try:
@@ -335,6 +360,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(ValueError)
     async def invalid(request, error):
+        from lake_equity.learning.trading import PlanBlocked
+        if isinstance(error, PlanBlocked):
+            return JSONResponse({'detail': {'message':str(error), **error.details}}, status_code=409)
         return JSONResponse({"detail": str(error)}, status_code=400)
 
     @app.exception_handler(FileNotFoundError)
@@ -357,14 +385,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "version": "0.2.0", "project_root": str(settings.root),
+        return {"status": "ok", "version": __version__, "project_root": str(settings.root),
                 "frontend_version": _frontend_version(settings.root)}
 
     @app.get("/api/v1/overview")
     def overview():
         from my_strategy.adapters.czsc_adapter import data_status
         data = data_status(db_path=settings.raw_db) if settings.raw_db.is_file() else {"available": False}
-        listed = jobs.list()
+        listed = jobs.list(None)
         default_method = None
         try:
             release = releases().active()
@@ -469,15 +497,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operation_lock.release()
 
     @app.get("/api/v1/jobs")
-    def list_jobs(limit: int = Query(100, ge=1, le=1000)):
-        combined = jobs.list(limit) + history.jobs(limit)
-        return {"jobs": sorted(combined, key=chronological, reverse=True)[:limit]}
+    def list_jobs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0),
+                  q: str = Query('', max_length=200), status: str = Query('', max_length=200),
+                  kind: str | None = None):
+        combined = jobs.list(None) + history.jobs(None)
+        return page(combined, 'jobs', limit, offset, q, status, kind)
 
     @app.post("/api/v1/jobs", status_code=202)
     def submit_job(body: JobRequest):
         if body.kind == "training":
             raise ValueError("旧20维训练入口已退役，请使用统一 factor_training 与显式特征配置")
-        if body.kind not in {"backtest", "scan", "prediction", "factor_training", "model_refit", "update", "import", "materialize", "analysis", "board_features", 'research_study', 'fusion_scan', 'trade_plan', 'pipeline'}:
+        if body.kind not in {"backtest", "scan", "prediction", "factor_training", "model_refit", "update", "import", "materialize", "analysis", "board_features", 'research_study', 'fusion_scan', 'trade_plan', 'pipeline', 'kronos_replay', 'storage_usage', 'scan_explanation', 'learning_retention'}:
             raise ValueError("不支持的任务类型")
         params = dict(body.params)
         if body.kind in {'scan', 'backtest', 'fusion_scan'} and (params.get('release_id') or
@@ -489,6 +519,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     params.setdefault('series_id', release['series_id'])
                 elif params.get('mode') not in {'historical', 'watchlist_replay'}:
                     params.setdefault('model_id', release['model_id'])
+        if body.kind == 'trade_plan':
+            result = trading().preflight(params)
+            if result['status'] != 'ready':
+                from lake_equity.learning.trading import PlanBlocked
+                raise PlanBlocked(result)
+            params.update({key:result['identity'][key] for key in ('snapshot_id','source_id','source_kind','source_sha256')})
         return jobs.submit(body.kind, params)
 
     @app.get("/api/v1/jobs/{identity}")
@@ -523,18 +559,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return jobs.cancel(identity)
 
     @app.get("/api/v1/reports")
-    def reports(kind: str | None = None, limit: int = Query(100, ge=1, le=200)):
-        items = history.reports(kind=kind, limit=limit)["reports"]
+    def reports(kind: str | None = None, limit: int = Query(100, ge=1, le=200),
+                offset: int = Query(0, ge=0), q: str = Query('', max_length=200),
+                status: str = Query('', max_length=200)):
+        items = history.reports(kind=kind, limit=None)["reports"]
         if kind in {None, "factor_training", "training"}:
-            items += [{**row, "kind": "factor_training"} for row in learning().list_runs().get("runs", [])]
-        items += workflow().list_runs(kind=kind, limit=limit).get("reports", [])
+            items += [{**row, "kind": "factor_training"} for row in learning().list_runs(limit=None).get("runs", [])]
+        items += workflow().list_runs(kind=kind, limit=None).get("reports", [])
         if kind in {None, 'research_study'}:
             items += [{**row, 'run_id': row.get('run_id', row['study_id']), 'kind': 'research_study',
-                       'title': '十年模型研究'} for row in studies().list_runs().get('studies', [])]
+                       'title': '十年模型研究'} for row in studies().list_runs(limit=None).get('studies', [])]
         if kind in {None, 'fusion_scan'}:
-            items += fusion().list_runs(limit=limit).get('reports', [])
+            items += fusion().list_runs(limit=None).get('reports', [])
+        if kind in {None, 'kronos_replay'}:
+            replay_runs = replays().list_runs(limit=None)
+            items += replay_runs.get('reports', replay_runs.get('runs', []))
+        if kind in {None, 'scan_explanation'}:
+            items += explanations().list_runs(limit=None).get('reports', [])
         unique = {row.get("run_id", row.get("id")): row for row in items}
-        return {"reports": sorted(unique.values(), key=chronological, reverse=True)[:limit]}
+        return page(list(unique.values()), 'reports', limit, offset, q, status, kind)
 
     @app.get("/api/v1/reports/{identity}")
     def report(identity: str, view: Literal['full', 'dashboard'] = 'full'):
@@ -543,11 +586,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return learning_dashboard_view(result) if view == 'dashboard' else result
         if identity.startswith('fusion-'):
             return fusion().read_run(identity)
+        if identity.startswith('replay-'):
+            return replays().read(identity)
+        if identity.startswith('explanation-'):
+            return explanations().read_run(identity)
         if identity.startswith('plan-'):
             return trading().read_plan(identity)
         if identity.startswith("learn-"):
             result = learning().read_run(identity)
-            return learning_dashboard_view(result) if view == 'dashboard' else result
+            return {**learning_dashboard_view(result),'retention':retention().status(identity)} if view == 'dashboard' else result
         if identity.startswith(("scan-", "backtest-", "bplan-")):
             return workflow().read_run(identity)
         return research.read_report(identity)
@@ -636,6 +683,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def forward_days(limit: int = Query(100, ge=1, le=1000)):
         return forward().list_days(limit=limit)
 
+    @app.post('/api/v1/kronos/replays/preview')
+    def replay_preview(spec: dict):
+        return replays().preview(spec)
+
+    @app.get('/api/v1/kronos/replays')
+    def replay_runs(limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0)):
+        return replays().list_runs(limit=limit, offset=offset)
+
+    @app.get('/api/v1/kronos/replays/{identity}')
+    def replay_run(identity: str):
+        return replays().read(identity)
+
     @app.get('/api/v1/forward/metrics')
     def forward_metrics(limit: int = Query(60, ge=1, le=500)):
         return forward().metrics({'limit': limit})
@@ -655,6 +714,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get('/api/v1/trading/accounts')
     def trading_accounts():
         return trading().list_accounts()
+
+    @app.get('/api/v1/trading/selections')
+    def trading_selections():
+        return selections().list()
+
+    @app.post('/api/v1/trading/plans/preflight')
+    def trading_plan_preflight(spec: dict):
+        return trading().preflight(spec)
+
+    @app.get('/api/v1/scans/defaults')
+    def scan_defaults():
+        from lake_equity.pipeline import _default_target_date
+        from lake_equity.learning.selection import latest_published_day
+        target, _, source, warning = _default_target_date(settings.root)
+        latest = latest_published_day(settings.root)
+        effective = min(target, latest) if target and latest else None
+        return dict(target_date=effective, requested_target_date=target, latest_published_day=latest,
+                    calendar_source=source, warning=warning, scope='all')
+
+    @app.get('/api/v1/scans/{identity}/decisions')
+    def scan_decisions(identity: str, account_id: str | None = None, snapshot_id: str | None = None):
+        account = trading().read_account(account_id) if account_id else None
+        if snapshot_id:
+            if account is None:
+                raise ValueError('Snapshot identity requires its account')
+            snapshot = trading().read_snapshot(snapshot_id)
+            if snapshot['account_id'] != account_id:
+                raise ValueError('Snapshot belongs to another account')
+            account = {**account, 'snapshot':snapshot}
+        return selections().decisions(identity, account=account)
+
+    @app.get('/api/v1/scans/{identity}/explanations/{symbol}')
+    def scan_explanation(identity: str, symbol: str):
+        baseline_id, source = explanation_source(identity)
+        if identity == baseline_id:
+            return explanations().read(identity, symbol)
+        from lake_equity.learning.selection import identity as source_hash
+        binding = dict(run_id=identity, base_scan_id=baseline_id, symbol=symbol,
+                       model_id=source['model_id'],release_id=source.get('release_id'),
+                       read_ref=source['read_ref'],as_of=source['as_of'],source_report_sha256=source_hash(source))
+        row = next((row for row in source['rows'] if row['symbol']==symbol), None)
+        if row is None:
+            raise KeyError(symbol)
+        try:
+            value = explanations().read(baseline_id, symbol)
+        except KeyError:
+            return dict(status='not_saved',reason='holding_not_scored_in_factor_baseline',source=binding)
+        if value.get('status')=='saved' and value.get('score') != row.get('factor_score'):
+            raise ValueError('Fusion factor score differs from the original explanation')
+        return {**value,'source':binding,'factor_source':value.get('source')}
 
     @app.get('/api/v1/trading/template')
     def trading_template():
@@ -693,8 +802,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return registry().read_model(model_id)
 
     @app.get("/api/v1/predictions/{reference}/chart")
-    def prediction_chart(reference: str):
-        return history.prediction_chart(reference)
+    def prediction_chart(reference: str, prediction_run_id: str | None = None):
+        return history.prediction_chart(reference, prediction_run_id=prediction_run_id)
 
     @app.get("/api/v1/accounts")
     @app.get("/api/v1/history/accounts")
@@ -720,7 +829,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/learning/runs/{run_id}")
     def learning_run(run_id: str, view: Literal['full', 'dashboard'] = 'full'):
         result = learning().read_run(run_id)
-        return learning_dashboard_view(result) if view == 'dashboard' else result
+        return {**learning_dashboard_view(result),'retention':retention().status(run_id)} if view == 'dashboard' else result
 
     @app.get("/api/v1/learning/series/{series_id}")
     def learning_series(series_id: str):

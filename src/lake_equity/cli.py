@@ -9,6 +9,7 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import sqlite3
+import tomllib
 
 from lake_equity.settings import Settings
 
@@ -21,6 +22,19 @@ def doctor(settings: Settings) -> dict:
             checks[package] = {"version": importlib.metadata.version(package), "available": True}
         except importlib.metadata.PackageNotFoundError:
             checks[package] = {"available": False}
+    project = settings.root / 'pyproject.toml'
+    if project.is_file():
+        from lake_equity import __version__
+        try:
+            expected = tomllib.loads(project.read_text(encoding='utf-8'))['project']['version']
+            installed = checks['lake-equity'].get('version')
+            matches = expected == __version__ == installed
+            checks['package_identity'] = dict(available=matches, source_version=expected,
+                                              imported_version=__version__, installed_version=installed)
+            if not matches:
+                checks['package_identity']['next_step'] = 'Reinstall the current project in its runtime; editable source updates do not refresh installed metadata.'
+        except (OSError, ValueError, KeyError) as error:
+            checks['package_identity'] = dict(available=False, error=str(error))
     from my_strategy.adapters.czsc_adapter import engine_contract, native_runtime
     try:
         checks["native_engine"] = {"available": bool(native_runtime()), "identity": engine_contract()}
@@ -101,31 +115,54 @@ def _verify_release_sources(root: Path) -> dict:
     return {"status": "failed" if failures else "ok", "sources": [source]}
 
 
+def _legacy_declarations(root: Path, filename: str, collection: str, hash_fields: tuple[str, ...]) -> dict:
+    path = root / "docs/provenance" / filename
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(payload, dict) or type(payload.get("schema")) is not int
+            or payload["schema"] != 1 or not isinstance(payload.get(collection), list)):
+        raise ValueError(f"Invalid {filename} schema")
+    declarations = {}
+    for declaration in payload[collection]:
+        if (not isinstance(declaration, dict)
+                or declaration.get("source_manifest") not in {"cnequity_source.json", "khquant_source.json"}
+                or not isinstance(declaration.get("path"), str)
+                or not isinstance(declaration.get("reason"), str) or not declaration["reason"].strip()
+                or any(not isinstance(declaration.get(key), str)
+                       or not re.fullmatch(r"[0-9a-f]{64}", declaration[key]) for key in hash_fields)):
+            raise ValueError(f"Invalid declaration in {filename}")
+        value = declaration["path"]
+        pure = PurePosixPath(value)
+        if (not value or pure.is_absolute() or ".." in pure.parts or "\\" in value
+                or ":" in value or pure.as_posix() != value):
+            raise ValueError(f"Invalid source path in {filename}: {value}")
+        key = declaration["source_manifest"], value
+        if key in declarations:
+            raise ValueError(f"Duplicate declaration in {filename}: {key}")
+        declarations[key] = declaration
+    return declarations
+
+
 def verify_sources(settings: Settings) -> dict:
     release_manifest = settings.root / "release-manifest.json"
     if release_manifest.exists() or release_manifest.is_symlink():
         return _verify_release_sources(settings.root.resolve())
     results = []
-    patches = {}
-    patch_manifest = settings.root / "docs/provenance/local_patches.json"
     try:
-        if patch_manifest.exists():
-            payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or type(payload.get("schema")) is not int or payload["schema"] != 1 or not isinstance(payload.get("patches"), list):
-                raise ValueError("Invalid local patch manifest")
-            for patch in payload["patches"]:
-                if (not isinstance(patch, dict) or patch.get("source_manifest") not in {"cnequity_source.json", "khquant_source.json"}
-                        or not isinstance(patch.get("path"), str) or not isinstance(patch.get("reason"), str) or not patch["reason"].strip()
-                        or any(not isinstance(patch.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", patch[key]) for key in ("original_sha256", "sha256"))):
-                    raise ValueError("Invalid local patch declaration")
-                key = patch["source_manifest"], patch["path"]
-                if key in patches:
-                    raise ValueError("Duplicate local patch declaration")
-                patches[key] = patch
+        patches = _legacy_declarations(settings.root, "local_patches.json", "patches", ("original_sha256", "sha256"))
     except (OSError, UnicodeError, ValueError) as error:
         return {"status": "failed", "sources": [{"source": "local_patches.json", "files_checked": 0,
                 "failures": [{"path": "local_patches.json", "reason": "invalid_manifest", "error": str(error)}]}]}
+    try:
+        omissions = _legacy_declarations(settings.root, "local_omissions.json", "omissions", ("original_sha256",))
+        if patches.keys() & omissions.keys():
+            raise ValueError("A source path cannot be both patched and omitted")
+    except (OSError, UnicodeError, ValueError) as error:
+        return {"status": "failed", "sources": [{"source": "local_omissions.json", "files_checked": 0,
+                "failures": [{"path": "local_omissions.json", "reason": "invalid_manifest", "error": str(error)}]}]}
     applied_patches = set()
+    applied_omissions = set()
     for filename, base in (("cnequity_source.json", settings.root / "vendor/cnequity"),
                            ("khquant_source.json", settings.research_app)):
         try:
@@ -138,9 +175,11 @@ def verify_sources(settings: Settings) -> dict:
             continue
         failures = []
         checked = 0
+        omitted = 0
         for entry in manifest["files"]:
             key = filename, entry["path"]
             patch = patches.get(key)
+            omission = omissions.get(key)
             expected = entry["sha256"]
             if patch:
                 applied_patches.add(key)
@@ -151,6 +190,16 @@ def verify_sources(settings: Settings) -> dict:
             path = base / entry["path"]
             if filename == "khquant_source.json" and not path.is_file():
                 path = base.parent / entry["path"]
+            if omission:
+                if omission["original_sha256"] != expected:
+                    failures.append({"path": entry["path"], "reason": "omission_original_sha256_mismatch"})
+                    continue
+                applied_omissions.add(key)
+                if path.is_file():
+                    failures.append({"path": entry["path"], "reason": "omitted_file_still_present"})
+                    continue
+                omitted += 1
+                continue
             if not path.is_file():
                 failures.append({"path": entry["path"], "reason": "missing"})
                 continue
@@ -159,11 +208,18 @@ def verify_sources(settings: Settings) -> dict:
             if observed != expected:
                 failures.append({"path": entry["path"], "reason": "sha256_mismatch"})
             checked += 1
-        results.append({"source": filename, "files_checked": checked, "failures": failures})
+        row = {"source": filename, "files_checked": checked, "failures": failures}
+        if omitted:
+            row["files_omitted"] = omitted
+        results.append(row)
     if applied_patches != set(patches):
         results.append({"source": "local_patches.json", "files_checked": 0,
                         "failures": [{"path": path, "reason": "unknown_source_patch"}
                                      for source, path in sorted(set(patches) - applied_patches)]})
+    if applied_omissions != set(omissions):
+        results.append({"source": "local_omissions.json", "files_checked": 0,
+                        "failures": [{"path": path, "reason": "unknown_source_omission"}
+                                     for source, path in sorted(set(omissions) - applied_omissions)]})
     return {"status": "ok" if not any(row["failures"] for row in results) else "failed", "sources": results}
 
 
@@ -248,12 +304,40 @@ def main() -> None:
     study.add_argument('--activate', action='store_true')
     fusion = commands.add_parser('fusion-scan', help='Fuse a pinned model selection with bounded Kronos research predictions')
     fusion.add_argument('--spec', type=Path, required=True)
-    plan = commands.add_parser('trade-plan', help='Build a next-session conditional plan from an existing account snapshot and saved fusion')
+    replay = commands.add_parser('kronos-replay', help='Bounded historical Kronos experiments; separate from live evidence')
+    replay_actions = replay.add_subparsers(dest='action', required=True)
+    for action in ('preview', 'run'):
+        replay_action = replay_actions.add_parser(action)
+        replay_action.add_argument('--spec', type=Path, required=True)
+    replay_resume = replay_actions.add_parser('resume')
+    replay_resume.add_argument('experiment_id')
+    replay_resume.add_argument('--max-calls', type=int)
+    replay_resume.add_argument('--budget-seconds', type=float)
+    replay_resume.add_argument('--evaluation-read-ref')
+    replay_list = replay_actions.add_parser('list')
+    replay_list.add_argument('--limit', type=int, default=100)
+    replay_list.add_argument('--offset', type=int, default=0)
+    replay_read = replay_actions.add_parser('read')
+    replay_read.add_argument('experiment_id')
+    plan = commands.add_parser('trade-plan', help='Build a next-session conditional plan from a current snapshot and saved factor/fusion selection')
     plan.add_argument('--spec', type=Path, required=True)
     maintenance = commands.add_parser('maintenance', help='Inspect and explicitly confirm cleanup of failed workflow build directories')
     maintenance.add_argument('--quarantine-preview', action='store_true', help='Read-only listing; never deletes')
     maintenance.add_argument('--quarantine-confirm', metavar='PLAN_ID', help='Plan id from a fresh preview')
     maintenance.add_argument('--ids', default='', help='Comma-separated previewed item ids to delete after confirmation')
+    retention=commands.add_parser('learning-retention',help='Review and exactly retire completed Qlib exchange files')
+    retention_actions=retention.add_subparsers(dest='action',required=True)
+    retention_actions.add_parser('candidates')
+    retention_review=retention_actions.add_parser('review')
+    retention_review.add_argument('--objects',type=Path,required=True,help='JSON array of exact candidate object IDs')
+    retention_read=retention_actions.add_parser('read');retention_read.add_argument('plan_id')
+    retention_confirm=retention_actions.add_parser('confirm');retention_confirm.add_argument('plan_id')
+    retention_confirm.add_argument('--token',required=True)
+    retention_confirm.add_argument('--objects',type=Path,required=True)
+    retention_confirm.add_argument('--confirmed',action='store_true')
+    retention_confirm.add_argument('--maintenance-confirmed',action='store_true')
+    retention_reconcile=retention_actions.add_parser('reconcile');retention_reconcile.add_argument('plan_id')
+    retention_reconcile.add_argument('--maintenance-confirmed',action='store_true')
     forward = commands.add_parser('forward', help='Record and verify post-release forward signals against later published bars')
     forward_commands = forward.add_subparsers(dest='action', required=True)
     forward_record = forward_commands.add_parser('record', help="Freeze one session's factor and Kronos signals before any outcome exists")
@@ -280,7 +364,12 @@ def main() -> None:
     forward_ingest.add_argument('--origin', choices=('live', 'backfill'), help='Omitted means inferred from the newest published session')
     args = parser.parse_args()
     settings = Settings.load(args.root)
-    settings.configure()
+    if (args.command == 'pipeline' and args.dry_run or
+            args.command == 'kronos-replay' and args.action in {'preview', 'list', 'read'} or
+            args.command == 'learning-retention'):
+        settings.configure(create_dirs=False)
+    else:
+        settings.configure()
     if args.command == "serve":
         if args.host not in {"127.0.0.1", "localhost", "::1"} and not os.environ.get("LAKE_EQUITY_API_TOKEN"):
             parser.error("Non-loopback binding requires LAKE_EQUITY_API_TOKEN")
@@ -330,6 +419,22 @@ def main() -> None:
             release = registry.from_study(result)
             registry.activate(release['release_id'], reason='Completed chronological research study; stage default remains research only')
             result = {**result, 'release_id': release['release_id'], 'research_active': True}
+    elif args.command == 'learning-retention':
+        from lake_equity.learning.retention import LearningRetentionService
+        service=LearningRetentionService(settings.root)
+        if args.action=='candidates':
+            result=service.candidates()
+        elif args.action=='read':
+            result=service.read_plan(args.plan_id)
+        elif args.action=='reconcile':
+            result=service.reconcile(args.plan_id,maintenance_confirmed=args.maintenance_confirmed)
+        else:
+            object_ids=json.loads(args.objects.read_text(encoding='utf-8'))
+            if args.action=='review':
+                result=service.review(object_ids)
+            else:
+                result=service.execute(args.plan_id,args.token,object_ids,confirmed=args.confirmed,
+                                       maintenance_confirmed=args.maintenance_confirmed)
     elif args.command == 'maintenance':
         from lake_equity.learning.quarantine import QuarantineService
         quarantine = QuarantineService(settings.root)
@@ -338,6 +443,22 @@ def main() -> None:
             result = quarantine.confirm(args.quarantine_confirm, ids, True)
         else:
             result = quarantine.listing()
+    elif args.command == 'kronos-replay':
+        from lake_equity.learning.kronos_replay import KronosReplayService
+        service = KronosReplayService(settings.root)
+        progress = lambda value: print(json.dumps(value, ensure_ascii=False), flush=True)
+        if args.action == 'list':
+            result = service.list_runs(args.limit, args.offset)
+        elif args.action == 'read':
+            result = service.read(args.experiment_id)
+        elif args.action == 'resume':
+            changes = {key: getattr(args, key) for key in ('max_calls', 'budget_seconds', 'evaluation_read_ref')
+                       if getattr(args, key) is not None}
+            result = _compute(settings, lambda: service.resume(args.experiment_id, changes, progress=progress))
+        else:
+            spec = json.loads(args.spec.read_text(encoding='utf-8'))
+            result = service.preview(spec) if args.action == 'preview' else _compute(
+                settings, lambda: service.run(spec, progress=progress))
     elif args.command in {'fusion-scan', 'trade-plan'}:
         spec = json.loads(args.spec.read_text(encoding='utf-8'))
         if args.command == 'fusion-scan':
@@ -423,7 +544,8 @@ def main() -> None:
         if args.skip_update:
             params['skip_update'] = True
         service = PipelineService(settings.root, LakeService(settings.root, source_db=settings.source_db))
-        result = _compute(settings, lambda: service.run(params, progress=lambda value: print(json.dumps(value, ensure_ascii=False), flush=True)))
+        result = service.preview(params) if args.dry_run else _compute(settings, lambda: service.run(
+            params, progress=lambda value: print(json.dumps(value, ensure_ascii=False), flush=True)))
     else:
         from lake_equity.data import LakeService
         service = LakeService(settings.root, source_db=settings.source_db)
@@ -438,6 +560,8 @@ def main() -> None:
         raise SystemExit(1)
     if args.command == "pipeline" and isinstance(result, dict):
         raise SystemExit(int(result.get("exit_code") or 0))
+    if args.command == 'kronos-replay':
+        raise SystemExit({'failed': 1, 'partial': 3, 'blocked': 4, 'cancelled': 130}.get(result.get('status'), 0))
 
 
 if __name__ == "__main__":

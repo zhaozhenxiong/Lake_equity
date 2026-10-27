@@ -192,8 +192,13 @@ class ResearchBridge:
         return {**result, "sources": sources, "calendar_identity": calendar_identity,
                 "status": "completed", "selected_policy": "structure_rules"}
 
-    def predict(self, spec):
+    def predict(self, spec, check_cancel=None):
         request, manifest = self._request(spec)
+        stop = _Cancellation(check_cancel)
+        stop.check()
+        if 'analysis_run_id' in request and (not isinstance(request['analysis_run_id'], str) or not request['analysis_run_id']):
+            raise ValueError('analysis_run_id must identify a saved analysis report')
+        analysis_run_id = request.pop('analysis_run_id', None)
         request["symbol"] = self._symbol(request["symbol"])
         from my_strategy.services.kronos_prediction import predict
 
@@ -207,7 +212,27 @@ class ResearchBridge:
                 raise ValueError("Prediction end and as_of disagree")
             request["end"] = request.pop("as_of")
         with self._lock:
-            return self._persist("prediction", self._engine().prediction(**request), manifest)
+            engine = self._engine()
+            binding = None
+            injected = {}
+            if analysis_run_id is not None:
+                from .prediction_binding import bind_analysis
+                binding, raw, expected, original = bind_analysis(self, analysis_run_id, request, manifest, engine)
+                injected['raw_snapshot'] = raw
+            stop.check()
+            result = engine.prediction(**request, stop=stop, **injected)
+            stop.check()
+            if binding is not None:
+                from lake_equity.data import InputContract
+                current = InputContract(self.raw_db).validate()
+                if (current.manifest_id != original.manifest_id or current.sqlite_sha256 != original.sqlite_sha256
+                        or current.manifest_sha256 != original.manifest_sha256 or current.stat_identity != original.stat_identity):
+                    raise ValueError('Analysis input manifest changed while predicting')
+                if result.get('symbol') != binding['symbol'] or result.get('as_of') != binding['as_of'] or result.get('input') != expected:
+                    raise ValueError('Generated prediction input differs from the bound analysis window')
+                result = {**result, 'analysis_binding': binding}
+            stop.check()
+            return self._persist("prediction", result, manifest)
 
     def scan(self, spec, progress=None, check_cancel=None):
         from my_strategy.services.analysis_methods import COMBINED
@@ -310,7 +335,7 @@ class ResearchBridge:
         return json.loads(gzip.decompress(content))
 
     def list_reports(self, kind=None, limit=50):
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200):
             raise ValueError("Report limit must be in 1..200")
         if not self.results_db.is_file():
             return {"items": [], "count": 0}
@@ -319,12 +344,12 @@ class ResearchBridge:
             if self._table(connection, "lake_research_runs"):
                 where, values = ("WHERE kind=?", [kind]) if kind else ("", [])
                 rows = connection.execute("SELECT run_id,kind,created_at,report_sha256,input_manifest_id,engine_run_id "
-                    "FROM lake_research_runs " + where + " ORDER BY created_at DESC LIMIT ?", [*values, limit]).fetchall()
+                    "FROM lake_research_runs " + where + " ORDER BY created_at DESC LIMIT ?", [*values, -1 if limit is None else limit]).fetchall()
                 items.extend(dict(row) for row in rows)
             if self._table(connection, "czsc_runs"):
                 where, values = ("WHERE kind=?", [kind]) if kind else ("", [])
                 rows = connection.execute("SELECT run_id,kind,created_at,symbol,summary FROM czsc_runs " + where +
-                    " ORDER BY created_at DESC LIMIT ?", [*values, limit]).fetchall()
+                    " ORDER BY created_at DESC LIMIT ?", [*values, -1 if limit is None else limit]).fetchall()
                 known = {item.get("engine_run_id") for item in items}
                 items.extend({**dict(row), "summary": json.loads(row["summary"])} for row in rows if row["run_id"] not in known)
         def created_at(item):

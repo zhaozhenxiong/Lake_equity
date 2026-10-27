@@ -5,6 +5,7 @@ import json
 import re
 import tomllib
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 import polars as pl
@@ -28,7 +29,7 @@ def _hex(value, length: int) -> bool:
     return isinstance(value, str) and re.fullmatch(f"[0-9a-f]{{{length}}}", value) is not None
 
 
-def _inside(path: Path, root: Path) -> Path:
+def _inside(path: Path, root: Path, *, resolved_root: Path | None = None) -> Path:
     try:
         relative = path.absolute().relative_to(root.absolute())
     except ValueError as exc:
@@ -43,9 +44,21 @@ def _inside(path: Path, root: Path) -> Path:
         if cursor.is_symlink():
             raise ValueError("Market read path cannot contain symlinks")
     resolved = path.resolve()
-    if not resolved.is_relative_to(root.resolve()):
+    if not resolved.is_relative_to(resolved_root if resolved_root is not None else root.resolve()):
         raise ValueError("Market read path escapes its configured root")
     return resolved
+
+
+@lru_cache(maxsize=128)
+def _generation_statistics(root: Path, dataset: str, receipt_sha256: str) -> dict:
+    """Reuse immutable statistics only after the caller validates the generation."""
+    spec = DATASETS[dataset]
+    frame = scan_parquet_root(root, dataset=dataset, partition_col=spec.query_date_col, committed=False)
+    expressions = [pl.len().alias("rows")]
+    if spec.query_date_col and spec.query_date_col in frame.collect_schema():
+        expressions.extend([pl.col(spec.query_date_col).min().cast(pl.String).alias("coverage_start"),
+                            pl.col(spec.query_date_col).max().cast(pl.String).alias("coverage_end")])
+    return frame.select(expressions).collect().row(0, named=True)
 
 
 class MarketStore:
@@ -122,11 +135,13 @@ class MarketStore:
             relative = Path(record.get("path", ""))
             if relative.is_absolute() or len(relative.parts) < 2 or relative.parts[0] != dataset or ".." in relative.parts or relative.suffix != ".parquet":
                 raise ValueError("Unsafe pinned generation file")
-            path = _inside(root.joinpath(*relative.parts[1:]), root)
+            path = _inside(root.joinpath(*relative.parts[1:]), root, resolved_root=root)
             if not _hex(record.get("sha256"), 64) or not path.is_file() or path.stat().st_size != record.get("size_bytes"):
                 raise Unavailable(f"Pinned generation file is missing or changed: {dataset}")
             expected_files.add(path)
-        actual_files = {_inside(path, root) for path in root.rglob("*.parquet")}
+        # root is resolved and every expected path/parent was checked above.
+        # Extra paths fail the set comparison without resolving them as trusted files.
+        actual_files = set(root.rglob("*.parquet"))
         if actual_files != expected_files:
             raise ValueError("Pinned generation file set mismatch")
         return root
@@ -159,11 +174,8 @@ class MarketStore:
             receipt_bytes = receipt_path.read_bytes()
             receipt = json.loads(receipt_bytes)
             item.update(available=True, revision_id=revision_id, revision=revision, run_id=receipt.get("run_id"), path=str(self.config.meta_root / "revisions" / "data" / name / revision_id), receipt=receipt, receipt_path=relative.as_posix(), receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
-            frame = self._scan_generation(name, item)
-            expressions = [pl.len().alias("rows")]
-            if spec.query_date_col and spec.query_date_col in frame.collect_schema():
-                expressions.extend([pl.col(spec.query_date_col).min().cast(pl.String).alias("coverage_start"), pl.col(spec.query_date_col).max().cast(pl.String).alias("coverage_end")])
-            item.update(frame.select(expressions).collect().row(0, named=True))
+            generation = self._generation(name, item)
+            item.update(_generation_statistics(generation, name, item["receipt_sha256"]))
             item["publication_coverage"] = receipt.get("metadata", {}).get("coverage", {})
             item["coverage_completeness"] = "not_assessed"
         payload = {"schema_version": 1, "captured_at": datetime.now(timezone.utc).isoformat(), "data_root": str(self.data_root), "datasets": datasets, "revision_map": {name: item["revision_id"] for name, item in datasets.items() if item["available"]}, "atomic_across_datasets": False, "historical_completeness": "not_assessed", "semantics": "raw_published_observations", "notes": ["Independent published generations captured sequentially; not an atomic cross-table PIT snapshot.", "Generation file identities follow CNEquity immutable receipts; full file bytes are not rehashed on each view."]}

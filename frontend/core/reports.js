@@ -2,6 +2,16 @@ import {api} from './api.js';
 import {arrayOf,badge,dataTable,dateTime,day,disclosure,downloadJson,empty,errorAdvice,errorHtml,escapeHtml,fullReportLink,kindLabel,number,percent,pretty,table,routeLink} from './ui.js';
 import {createLineChart,createResearchChart} from './charts.js';
 import {modelName} from './models.js';
+import {replayReport} from './kronos-replay.js';
+import {trainingRetentionHtml} from './retention-status.js';
+
+export function isPipelinePreview(record){
+  return record?.kind==='preview' || record?.params?.dry_run===true || record?.config?.dry_run===true;
+}
+
+export function reportStatusLabel(record){
+  return record?.status_label || (isPipelinePreview(record)?'只读预检（历史记录）':undefined);
+}
 
 export function reportAccounts(result) {
   if(result?.portfolio)return [{key:result.mode==='rolling'?'滚动模型账户':'固定模型账户',...result.portfolio}];
@@ -123,9 +133,9 @@ const policyLabel = value => ({structure_rules:'结构与量价',structure_krono
 
 export function reportList(reports, {limit=10}={}) {
   return table([
-    {label:'研究运行',render:row=>`<button class="row-link" data-report-id="${escapeHtml(reportId(row))}">${escapeHtml(row.title || kindLabel(row.kind || row.family))}</button><div class="muted small">${escapeHtml(reportId(row).slice(0,30))}</div>`},
+    {label:'研究运行',render:row=>`<button class="row-link" data-report-id="${escapeHtml(reportId(row))}">${escapeHtml(isPipelinePreview(row)?'流水线预检':row.title || kindLabel(row.kind || row.family))}</button><div class="muted small">${escapeHtml(reportId(row).slice(0,30))}</div>`},
     {label:'时间',render:row=>escapeHtml(dateTime(row.created_at))},
-    {label:'状态',render:row=>badge(row.status || row.summary?.status || 'saved',row.status || row.summary?.status ? undefined : '已保存')},
+    {label:'状态',render:row=>badge(row.status || row.summary?.status || 'saved',reportStatusLabel(row) || (row.status || row.summary?.status ? undefined : '已保存'))},
     {label:'范围',render:row=>escapeHtml(row.symbol || row.summary?.symbols?.join('、') || row.summary?.data_range?.end || '—')},
     {label:'操作',render:row=>`<button class="small-button" data-report-id="${escapeHtml(reportId(row))}">读取报告</button>`}
   ],reports.slice(0,limit),{emptyTitle:'尚无保存的研究报告',emptyDescription:'完成分析、扫描或回测后，可在此重开原报告。读取不会重新运行计算。'});
@@ -168,7 +178,7 @@ export function renderReport(host,response,{id=''}={}) {
   const accounts=reportAccounts(result);
   const reportStart=result.start || result.spec?.start || result.data_range?.start || '';
   const reportEnd=result.end || result.spec?.end || result.data_end || '';
-  host.innerHTML=`<section class="panel"><div class="report-heading"><div><h2>${escapeHtml(result.symbol || kindLabel(result.kind || (accounts.length?'backtest':'analysis')))}${result.symbol?' · 研究报告':''}</h2><p>${escapeHtml(result.start || result.data_range?.start || '')} ${result.end || result.data_end ? '至' : ''} ${escapeHtml(result.end || result.data_end || '')}</p><p class="inline-code">${escapeHtml(result.run_id || result.result_id || id)}</p></div><div class="report-actions">${badge(result.status || 'saved',result.status?undefined:'已保存')}<button class="small-button" data-export>${result.dashboard_view?'导出界面摘要 JSON':'导出 JSON'}</button>${fullReportLink(result)}</div></div><div data-report-content></div>${disclosure('数据、方法与运行身份',result.run_context || result.identity || {data_version:result.data_version,price_basis:result.price_basis,source_sha256:result.source_sha256,method:result.analysis_method,as_of:result.as_of})}${disclosure(result.dashboard_view?'界面摘要与产物校验':'原始保存结果',result)}</section>`;
+  host.innerHTML=`<section class="panel"><div class="report-heading"><div><h2>${escapeHtml(isPipelinePreview(result)?'流水线预检':result.family==='frozen_factor_refit_v1'?'最终重拟合报告':result.symbol || kindLabel(result.kind || (accounts.length?'backtest':'analysis')))}${result.symbol?' · 研究报告':''}</h2><p>${escapeHtml(result.start || result.data_range?.start || '')} ${result.end || result.data_end ? '至' : ''} ${escapeHtml(result.end || result.data_end || '')}</p><p class="inline-code">${escapeHtml(result.run_id || result.result_id || id)}</p></div><div class="report-actions">${badge(result.status || 'saved',reportStatusLabel(result) || (result.status?undefined:'已保存'))}<button class="small-button" data-export>${result.dashboard_view?'导出界面摘要 JSON':'导出 JSON'}</button>${fullReportLink(result)}</div></div><div data-report-content></div>${disclosure('数据、方法与运行身份',result.run_context || result.identity || {data_version:result.data_version,price_basis:result.price_basis,source_sha256:result.source_sha256,method:result.analysis_method,as_of:result.as_of})}${disclosure(result.dashboard_view?'界面摘要与产物校验':'原始保存结果',result)}</section>`;
   const content=host.querySelector('[data-report-content]');
   const range=host.querySelector('.report-heading p');if(range)range.textContent=`${reportStart}${reportStart&&reportEnd?' 至 ':''}${reportEnd}`;
   host.querySelector('[data-export]').addEventListener('click',()=>downloadJson(result,`lake-equity-${result.run_id || result.result_id || id || 'report'}${result.dashboard_view?'-dashboard-summary':''}.json`));
@@ -178,12 +188,18 @@ export function renderReport(host,response,{id=''}={}) {
   if(result.family==='fusion_scan_v1'){
     content.innerHTML=`<div class="panel-body"><h3>多因子与Kronos复核</h3><p>初筛分母 ${number(result.coverage?.baseline_total,0)}；复核分母 ${number(result.coverage?.total,0)}；可用 ${number(result.coverage?.succeeded,0)}；不可用 ${number(result.coverage?.unusable,0)}；失败 ${number(result.coverage?.failed,0)}；延期 ${number(result.coverage?.deferred,0)}。</p><a class="button" href="${routeLink('scan',{report:result.run_id})}">打开完整选股结果</a><a class="button" href="${routeLink('watchlist',{tab:'trading',fusion_id:result.run_id})}">结合持仓构建计划</a></div>`;return()=>{};
   }
+  if(result.family==='scan_explanation_attachment_v1'){
+    content.innerHTML=`<div class="panel-body"><h3>模型评分解释附件</h3><p>已核验 ${number(result.explanation?.count,0)} 条原评分；贡献来自原冻结模型与输入，附件不覆盖原报告。</p><a class="button" href="${routeLink('scan',{report:result.source_run_id})}">打开原选股与指标依据</a></div>`;return()=>{};
+  }
+  if(result.family==='kronos_replay_v1'){
+    content.innerHTML=replayReport(result)+`<div class="panel-body"><a class="button" href="${routeLink('models',{replay:result.run_id})}">打开循环实验</a></div>`;return()=>{};
+  }
   if(result.family==='backtest_plan_v1' || result.schema==='backtest_conditional_plan_v1'){
     content.innerHTML=backtestPlanHtml(result);bindPlanActions(content);return()=>{};
   }
   if(result.plan_id){content.innerHTML=`<div class="panel-body"><h3>次日条件买卖计划</h3><p>${escapeHtml(result.execution_date)}；${number(result.orders?.length,0)}条拟交易。${result.is_fixture?'合成验收账户。':''}未连接券商，不等于成交。</p><a class="button" href="${routeLink('watchlist',{tab:'trading',plan_id:result.plan_id,account_id:result.account_id})}">查看计划和回填实际成交</a></div>${dataTable(result.orders || [])}`;return()=>{};}
   if(['cross_sectional_return_v1','frozen_factor_refit_v1'].includes(result.family)){
-    content.innerHTML=`<div class="panel-body"><p>训练后端 ${escapeHtml(result.spec?.backend || '—')} · ${result.spec?.scope==='all'?'全市场冻结人口':`${number(result.spec?.symbols?.length,0)} 只显式股票`} · ${number(result.folds?.length,0)} 个滚动窗口</p><p class="risk-note">${result.family==='frozen_factor_refit_v1'?'最终重拟合推理版本，没有独立样本外成绩。':'研究候选；训练完成不自动取得严格历史或模拟配置资格。'}</p><a class="button" href="#models?run_id=${encodeURIComponent(result.run_id || '')}">在模型中心核验完整训练报告</a></div>${table([{label:'模型',render:row=>escapeHtml(modelName(row.name))},{label:'特征',render:row=>number(row.feature_count,0)},{label:'样本外 Rank IC',render:row=>number(row.metrics?.rank_ic,4)},{label:'RMSE',render:row=>number(row.metrics?.rmse,4)},{label:'费用后研究收益',render:row=>percent(row.portfolio?.metrics?.total_return)}],arrayOf(result,'models'))}`;
+    content.innerHTML=`<div class="panel-body">${trainingRetentionHtml(result.retention)}<p>训练后端 ${escapeHtml(result.spec?.backend || '—')} · ${result.spec?.scope==='all'?'全市场冻结人口':`${number(result.spec?.symbols?.length,0)} 只显式股票`} · ${number(result.folds?.length,0)} 个滚动窗口</p><p class="risk-note">${result.family==='frozen_factor_refit_v1'?'最终重拟合推理版本，没有独立样本外成绩。':'研究候选；训练完成不自动取得严格历史或模拟配置资格。'}</p><a class="button" href="#models?run_id=${encodeURIComponent(result.run_id || '')}">在模型中心核验完整训练报告</a></div>${table([{label:'模型',render:row=>escapeHtml(modelName(row.name))},{label:'特征',render:row=>number(row.feature_count,0)},{label:'样本外 Rank IC',render:row=>number(row.metrics?.rank_ic,4)},{label:'RMSE',render:row=>number(row.metrics?.rmse,4)},{label:'费用后研究收益',render:row=>percent(row.portfolio?.metrics?.total_return)}],arrayOf(result,'models'))}`;
     return()=>{};
   }
   if(accounts.length){

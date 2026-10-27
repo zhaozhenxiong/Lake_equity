@@ -185,13 +185,18 @@ def test_kronos_observation_cache_reuses_verified_result_and_rejects_tampering(t
 
 @pytest.fixture
 def account_fixture(tmp_path, monkeypatch):
+    from datetime import datetime
+    from lake_equity.learning import selection
+    monkeypatch.setattr(selection, '_clock', lambda: datetime.fromisoformat('2026-10-22T18:00:00+08:00'))
     service = TradingService(tmp_path)
     account = service.create_account(dict(name='SYNTHETIC TEST ONLY', snapshot=dict(as_of='2026-10-22', cash=10_000., is_fixture=True,
                  permissions={'star': False, 'chinext': False}, positions=[dict(symbol='600000.SH', total_shares=1000, sellable_shares=1000,
                  buy_date='2026-10-21', average_cost=10.)])))
     release = dict(release_id='release-' + '1' * 32, model_id='model-' + '2' * 32,
+                   created_at='2026-10-21T17:00:00+08:00',
                    risk=dict(top_k=1, max_total_weight=.8, max_stock_weight=.8, rebalance_sessions=5), fusion={'mode': 'factor_baseline'})
     fusion = dict(run_id='fusion-' + '3' * 32, final_ranking=True, status='completed', release_id=release['release_id'], release_identity=release,
+                  family='fusion_scan_v1', created_at='2026-10-22T16:00:00+08:00', frozen_at='2026-10-21T16:00:00+08:00',
                   model_id=release['model_id'], read_ref='a' * 64, as_of='2026-10-22', next_session='2026-10-23',
                   market_evidence={'calendar_recent': ['2026-10-21', '2026-10-22']}, rows=[
                       dict(symbol='600000.SH', selection_eligible=False, fused_rank=None, reference_close=10., prior_volume=1_000_000., atr_pct=.02, kronos_status='deferred'),
@@ -268,7 +273,7 @@ def test_fill_batch_is_atomic_when_cash_is_insufficient(account_fixture):
 def test_plan_requires_current_holdings_and_permissions(account_fixture):
     service, account, fusion = account_fixture
     fusion['rows'] = [fusion['rows'][1]]
-    with pytest.raises(ValueError, match='every current holding'):
+    with pytest.raises(ValueError, match='持仓'):
         service.build_plan(dict(account_id=account['account_id'], fusion_id=fusion['run_id']))
     fusion['rows'].insert(0, dict(symbol='600000.SH', selection_eligible=False, fused_rank=None, reference_close=10., prior_volume=1_000_000., atr_pct=.02, kronos_status='deferred'))
     fusion['rows'][1]['symbol'] = '688001.SH'
@@ -291,9 +296,10 @@ def test_unknown_locked_inventory_is_not_assumed_available_next_day(account_fixt
 def test_missing_valuation_blocks_all_rebalance_quantities(account_fixture):
     service, account, fusion = account_fixture
     fusion['rows'][0]['reference_close'] = None
-    plan = service.build_plan(dict(account_id=account['account_id'], fusion_id=fusion['run_id']))
-    assert plan['account_equity_reference'] is None
-    assert not plan['orders']
+    # Missing valuation now blocks saving instead of creating a no-order plan.
+    with pytest.raises(trading_module.PlanBlocked, match='参考价格'):
+        service.build_plan(dict(account_id=account['account_id'], fusion_id=fusion['run_id']))
+    assert service.list_plans()['plans'] == []
 
 
 def test_baseline_zero_weight_ignores_kronos_for_holdings_as_well(account_fixture):

@@ -11,13 +11,14 @@ from lake_equity.learning.preview import BacktestPreview
 
 
 def _touch(path: Path, content: str) -> None:
+    previous = path.stat().st_mtime_ns if path.exists() else 0
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    stamp = path.stat().st_mtime_ns + 1_000_000
+    stamp = max(previous, path.stat().st_mtime_ns) + 1_000_000
     os.utime(path, ns=(stamp, stamp))
 
 
-def test_frontend_version_tracks_module_metadata_not_vendor(tmp_path):
+def test_frontend_version_tracks_module_content_not_vendor(tmp_path):
     _touch(tmp_path / "frontend/app.js", "console.log(1);")
     _touch(tmp_path / "frontend/styles.css", "body{color:red}")
     _touch(tmp_path / "frontend/vendor/echarts.min.js", "vendor-one")
@@ -27,8 +28,29 @@ def test_frontend_version_tracks_module_metadata_not_vendor(tmp_path):
     assert _frontend_version(tmp_path) == first
     _touch(tmp_path / "frontend/app.js", "console.log(2);")
     assert _frontend_version(tmp_path) != first
+    current = _frontend_version(tmp_path)
     (tmp_path / "frontend/README.md").write_text("ignored", encoding="utf-8")
-    assert _frontend_version(tmp_path) == _frontend_version(tmp_path)
+    assert _frontend_version(tmp_path) == current
+
+
+def test_frontend_version_detects_same_size_same_timestamp_content_change(tmp_path):
+    target = tmp_path / "frontend/app.js"
+    _touch(target, "console.log(1);")
+    before = target.stat()
+    first = _frontend_version(tmp_path)
+    target.write_text("console.log(2);", encoding="utf-8")
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert target.stat().st_size == before.st_size
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    assert _frontend_version(tmp_path) != first
+
+
+def test_frontend_version_is_stable_across_timestamp_only_changes(tmp_path):
+    target = tmp_path / "frontend/app.js"
+    _touch(target, "console.log(1);")
+    first = _frontend_version(tmp_path)
+    _touch(target, "console.log(1);")
+    assert _frontend_version(tmp_path) == first
 
 
 def test_preview_rejects_invalid_requests_before_touching_data(tmp_path):

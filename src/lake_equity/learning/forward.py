@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS events (
         return row
 
     def read(self, day):
+        from .forward_evidence import timestamp
         day = _day(day, 'day')
         if not self.index.is_file():
             raise KeyError(day)
@@ -219,10 +220,17 @@ CREATE TABLE IF NOT EXISTS events (
             if head is None:
                 raise KeyError(day)
             attempt = self._latest_attempt(conn, day)
-            verification_row = conn.execute('SELECT verification_id,source_read_ref,revision,payload_json,created_at '
-                                             'FROM verifications WHERE day=? ORDER BY created_at DESC LIMIT 1',
-                                             (day,)).fetchone()
-            metrics_row = conn.execute('SELECT * FROM metrics WHERE day=? ORDER BY created_at DESC LIMIT 1', (day,)).fetchone()
+            payload = json.loads(attempt[1]) if attempt else {}
+            candidates = conn.execute('SELECT verification_id,source_read_ref,revision,payload_json,created_at,rowid '
+                                      'FROM verifications WHERE day=? AND horizon=? ORDER BY created_at DESC',
+                                      (day, payload.get('horizon'))).fetchall()
+            candidates.sort(key=lambda row: (timestamp(row[4]) or -1, row[5]), reverse=True)
+            unique_attempt = conn.execute('SELECT count(*) FROM attempts WHERE day=?', (day,)).fetchone()[0] == 1
+            verification_row = next((row for row in candidates
+                if json.loads(row[3]).get('record_identity') == payload.get('identity')
+                or (unique_attempt and not json.loads(row[3]).get('record_identity'))), None)
+            metrics_row = conn.execute('SELECT * FROM metrics WHERE verification_id=?',
+                                      (verification_row[0],)).fetchone() if verification_row else None
             realized_rows = []
             if verification_row:
                 columns = [item[1] for item in conn.execute('PRAGMA table_info(realized)')]
@@ -656,8 +664,12 @@ CREATE TABLE IF NOT EXISTS events (
         source_read_ref = session.snapshot['read_ref']
         revision = 0 if self._bars_identity(bars, day, symbols) == payload.get('bars_sha256') else 1
         with closing(self._ro(self.index)) as conn:
-            existing = conn.execute('SELECT verification_id FROM metrics WHERE day=? AND horizon=? AND source_read_ref=? AND revision=?',
-                                    (day, horizon, source_read_ref, revision)).fetchone()
+            candidates = conn.execute('SELECT m.verification_id,v.payload_json FROM metrics m '
+                                     'JOIN verifications v ON v.verification_id=m.verification_id '
+                                     'WHERE m.day=? AND m.horizon=? AND m.source_read_ref=? AND m.revision=? '
+                                     'ORDER BY m.created_at DESC', (day, horizon, source_read_ref, revision)).fetchall()
+            existing = next((row for row in candidates
+                             if json.loads(row[1]).get('record_identity') == payload['identity']), None)
         if existing:
             return dict(day=day, status='reused', verification_id=existing[0])
         realized = {symbol: verification.realized_return(bars, symbol, day, futures, horizon) for symbol in symbols}
@@ -674,6 +686,7 @@ CREATE TABLE IF NOT EXISTS events (
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / (verification_id + '.json')
         document = dict(schema='forward_verify_document_v1', day=day, verification_id=verification_id,
+                        record_identity=payload['identity'],
                         source_read_ref=source_read_ref, revision=revision, futures=futures,
                         realized=realized, metrics=metrics, created_at=created)
         path.write_text(canonical(document), encoding='utf-8')
@@ -732,6 +745,39 @@ CREATE TABLE IF NOT EXISTS events (
                     source_read_ref=source_read_ref, futures=futures, metrics=metrics, artifact_sha256=sha)
 
     # -- metrics -----------------------------------------------------------
+    def _metric_rows(self):
+        from .forward_evidence import annotate, timestamp
+        if not self.index.is_file():
+            return []
+        with closing(self._ro(self.index)) as conn:
+            columns = ['_rowid'] + [item[1] for item in conn.execute('PRAGMA table_info(metrics)')]
+            raw = [dict(zip(columns, row)) for row in conn.execute(
+                'SELECT rowid,* FROM metrics ORDER BY created_at DESC, rowid DESC')]
+            raw.sort(key=lambda row: (timestamp(row['created_at']) or -1, row['_rowid']), reverse=True)
+            latest = {}
+            for row in raw:
+                document = conn.execute('SELECT payload_json FROM verifications WHERE verification_id=?',
+                                        (row['verification_id'],)).fetchone()
+                identity = (json.loads(document[0]) if document else {}).get('record_identity')
+                candidates = [json.loads(item[0]) for item in conn.execute(
+                    'SELECT payload_json FROM attempts WHERE day=? ORDER BY rowid DESC', (row['day'],))]
+                verified_at = timestamp(row['created_at'])
+                candidates = [item for item in candidates if item.get('horizon') == row['horizon']
+                              and ((identity and item.get('identity') == identity) or
+                                   (not identity and verified_at is not None
+                                    and timestamp(item.get('created_at')) is not None
+                                    and timestamp(item.get('created_at')) <= verified_at))]
+                record = candidates[0] if candidates else {}
+                row['details'] = json.loads(row.pop('details_json'))
+                annotate(row, record)
+                if not identity and len(candidates) != 1:
+                    row['qualification'] = dict(live_eligible=False, reasons=['legacy_record_binding_ambiguous'])
+                latest.setdefault((row['day'], canonical(row['group'])), row)
+        result = sorted(latest.values(), key=lambda row: (row['day'], timestamp(row['created_at']) or -1, row['_rowid']))
+        for row in result:
+            row.pop('_rowid')
+        return result
+
     def metrics(self, params=None):
         body = dict(params or {})
         if set(body) - {'limit'}:
@@ -739,40 +785,11 @@ CREATE TABLE IF NOT EXISTS events (
         limit = max(1, min(500, int(body.get('limit', 60))))
         if not self.index.is_file():
             return {'schema': 'forward_metrics_v1', 'days': [], 'summary': None}
-        with closing(self._ro(self.index)) as conn:
-            columns = [item[1] for item in conn.execute('PRAGMA table_info(metrics)')]
-            rows = [dict(zip(columns, row)) for row in conn.execute(
-                'SELECT * FROM metrics ORDER BY created_at DESC LIMIT ?', (limit * 4,))]
-        latest = {}
-        for row in rows:
-            latest.setdefault(row['day'], row)
-        rows = list(latest.values())[:limit]
-        rows.sort(key=lambda row: row['day'])
-        for row in rows:
-            row['details'] = json.loads(row.pop('details_json'))
-        values = [row['rank_ic'] for row in rows if row['rank_ic'] is not None]
-        agreement = [row['sign_agree'] for row in rows if row['sign_agree'] is not None]
-        summary = dict(days=len(rows), rank_ic_mean=None, ic_ir=None, sign_agree_mean=None, coverage_mean=None)
-        if values:
-            summary['rank_ic_mean'] = float(np.mean(values))
-            if len(values) > 1 and np.std(values, ddof=1) > 0:
-                summary['ic_ir'] = float(np.mean(values) / np.std(values, ddof=1))
-        if agreement:
-            summary['sign_agree_mean'] = float(np.mean(agreement))
-        if rows:
-            summary['coverage_mean'] = float(np.mean([row['coverage'] for row in rows]))
-        rolling = {'buckets': _aggregate_buckets(rows)}
-        for window in (5, 20, 60):
-            subset = rows[-window:]
-            ic = [row['rank_ic'] for row in subset if row['rank_ic'] is not None]
-            agree = [row['sign_agree'] for row in subset if row['sign_agree'] is not None]
-            rolling[f'last{window}'] = dict(
-                days=len(subset),
-                rank_ic_mean=float(np.mean(ic)) if ic else None,
-                sign_agree_mean=float(np.mean(agree)) if agree else None,
-                coverage_mean=float(np.mean([row['coverage'] for row in subset])) if subset else None)
-        summary['rolling'] = rolling
-        return {'schema': 'forward_metrics_v1', 'days': rows, 'summary': summary}
+        from .forward_evidence import aggregate
+        rows = self._metric_rows()
+        selected = [row for row in rows if row['group'] == rows[-1]['group']] if rows else []
+        return {'schema': 'forward_metrics_v1', 'days': rows[-limit:],
+                'summary': aggregate(selected, _aggregate_buckets)}
 
     def evaluations(self, day=None):
         if not self.index.is_file():
@@ -796,21 +813,33 @@ CREATE TABLE IF NOT EXISTS events (
             return {'schema': 'forward_summary_v1', 'days': {'total': 0}, 'rolling': None,
                     'gates': [], 'kronos': None, 'sample': {'verified_days': 0, 'required_days': 40,
                                                              'status': 'insufficient'}}
-        days = self.list_days(limit=1000)['days']
+        days = self.list_days(limit=-1)['days']
         metrics = self.metrics({'limit': limit})
         with closing(self._ro(self.index)) as conn:
             payloads = [json.loads(row[0]) for row in conn.execute(
                 'SELECT payload_json FROM attempts a WHERE rowid=(SELECT MAX(rowid) FROM attempts b WHERE b.day=a.day) '
-                'ORDER BY day DESC LIMIT ?', (limit,))]
+                'ORDER BY day DESC')]
         kronos = {status: 0 for status in ('succeeded', 'unusable', 'failed', 'deferred')}
         for payload in payloads:
             for status, count in ((payload.get('kronos') or {}).get('coverage') or {}).items():
                 if status in kronos:
                     kronos[status] += int(count or 0)
         requested = sum(kronos.values())
-        verified = [row for row in metrics['days'] if row.get('n')]
-        sample = dict(verified_days=len(verified), required_days=40,
-                      status='sufficient' if len(verified) >= 40 else 'insufficient')
+        all_metrics = self._metric_rows()
+        verified = [row for row in all_metrics if row.get('n')]
+        live = [row for row in verified if row['qualification']['live_eligible']]
+        groups = {}
+        for row in live:
+            groups.setdefault(canonical(row['group']), []).append(row)
+        selected = live[-1]['group'] if live else None
+        count = len({row['day'] for row in live if row['group'] == selected})
+        sample = dict(verified_days=count, required_days=40, selected_group=selected,
+                      historical_verified_days=len({row['day'] for row in verified if row['origin'] == 'backfill'}),
+                      total_qualified_live_days=len({row['day'] for row in live}),
+                      groups=[dict(group=rows[0]['group'], verified_days=len({row['day'] for row in rows}))
+                              for rows in groups.values()],
+                      status='sufficient' if count >= 40 else 'insufficient',
+                      paper_allocation_eligible=False)
         latest = verified[-1] if verified else None
         counts = dict(total=len(days),
                       recorded=sum(1 for row in days if row['status'] == 'recorded'),
@@ -824,8 +853,10 @@ CREATE TABLE IF NOT EXISTS events (
                 'kronos': dict(**kronos, requested=requested,
                                coverage=(kronos['succeeded'] / requested) if requested else None),
                 'sample': sample,
-                'limitations': ['Forward evidence is research only; fewer than 40 verified days cannot support a protocol change.',
-                                'Kronos usable coverage is sparse by contract; missing names stay factor-only rather than fabricated.']}
+                'limitations': ['历史补录不计入实时前瞻；独立日按同一发布、模型及目标周期分别累计。40 日仅为研究复核门槛，不代表配置资格。',
+                                '滚动窗口是最近已记录信号日，不是连续交易日；缺失日不补零。',
+                                '旧账本的因子相对中位数方向、开盘至收盘收益与 Kronos 收盘至收盘目标不同，一致率仅作历史描述。',
+                                '1 日开盘至当日收盘不是 A 股新建仓可执行回合；成本扣减不等于真实交易回测。']}
 
 
 def _aggregate_buckets(rows):

@@ -238,11 +238,11 @@ class StudyService:
         self.runs_root = self.root / 'var/learning/studies'
         self.index = self.root / 'var/learning/studies.db'
 
-    def list_runs(self):
+    def list_runs(self, limit=100):
         if not self.index.is_file():
             return {'studies': []}
         with closing(sqlite3.connect(self.index.as_uri() + '?mode=ro', uri=True)) as conn:
-            return {'studies': [json.loads(row[0]) for row in conn.execute('SELECT summary FROM studies ORDER BY rowid DESC LIMIT 100')]}
+            return {'studies': [json.loads(row[0]) for row in conn.execute('SELECT summary FROM studies ORDER BY rowid DESC LIMIT ?', (-1 if limit is None else limit,))]}
 
     def read_run(self, study_id):
         if not isinstance(study_id, str) or not re.fullmatch('study-[0-9a-f]{32}', study_id):

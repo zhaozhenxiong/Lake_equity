@@ -25,9 +25,9 @@ def learning_api(integrated_app, monkeypatch):
             calls.append("catalog")
             return {"family": "cross_sectional_return_v1", "backends": [{"id": "local", "available": True}]}
 
-        def list_runs(self):
+        def list_runs(self, limit=100):
             calls.append("list_runs")
-            return {"runs": [{"run_id": "learn-synthetic", "status": "completed"}]}
+            return {"runs": [{"run_id": "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed"}]}
 
         def read_run(self, run_id):
             calls.append(("read_run", run_id))
@@ -47,7 +47,7 @@ def learning_api(integrated_app, monkeypatch):
                     check_cancel()
                     time.sleep(0.005)
             check_cancel()
-            return {"run_id": "learn-synthetic", "lake_run_id": "learn-synthetic", "status": "completed", "family": "cross_sectional_return_v1"}
+            return {"run_id": "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "lake_run_id": "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "family": "cross_sectional_return_v1"}
 
     module = types.ModuleType("lake_equity.learning.service")
     module.LearningService = FakeLearning
@@ -67,9 +67,9 @@ def terminal(client, identity):
 def test_learning_gets_only_read_catalog_and_verified_saved_reports(learning_api):
     client, app, settings, calls, started = learning_api
     assert client.get("/api/v1/learning/catalog").json()["family"] == "cross_sectional_return_v1"
-    assert client.get("/api/v1/learning/runs").json()["runs"][0]["run_id"] == "learn-synthetic"
-    assert client.get("/api/v1/learning/runs/learn-synthetic").json()["run_id"] == "learn-synthetic"
-    assert calls == ["catalog", "list_runs", ("read_run", "learn-synthetic")]
+    assert client.get("/api/v1/learning/runs").json()["runs"][0]["run_id"] == "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert client.get("/api/v1/learning/runs/learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").json()["run_id"] == "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert calls == ["catalog", "list_runs", ("read_run", "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     assert app.state.jobs.list() == []
     assert not started.is_set()
     assert client.get("/api/v1/learning/runs/missing").status_code == 404
@@ -78,13 +78,13 @@ def test_learning_gets_only_read_catalog_and_verified_saved_reports(learning_api
 
 def test_dashboard_report_view_keeps_full_read_endpoint_and_never_starts_work(learning_api):
     client, app, settings, calls, started = learning_api
-    full = client.get('/api/v1/learning/runs/learn-synthetic').json()
-    summary = client.get('/api/v1/learning/runs/learn-synthetic?view=dashboard').json()
+    full = client.get('/api/v1/learning/runs/learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa').json()
+    summary = client.get('/api/v1/learning/runs/learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?view=dashboard').json()
     assert 'dashboard_view' not in full
-    assert summary['dashboard_view']['full_report_url'] == '/api/v1/learning/runs/learn-synthetic'
+    assert summary['dashboard_view']['full_report_url'] == '/api/v1/learning/runs/learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     assert {key: summary[key] for key in full} == full
-    assert client.get('/api/v1/reports/learn-synthetic?view=dashboard').json() == summary
-    assert client.get('/api/v1/learning/runs/learn-synthetic?view=invalid').status_code == 422
+    assert client.get('/api/v1/reports/learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?view=dashboard').json() == summary
+    assert client.get('/api/v1/learning/runs/learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?view=invalid').status_code == 422
     assert app.state.jobs.list() == []
     assert not started.is_set()
 
@@ -99,7 +99,7 @@ def test_factor_job_bypasses_legacy_input_lock_and_manifest(learning_api):
         assert response.status_code == 202
         job = terminal(client, response.json()["id"])
     assert job["status"] == "succeeded"
-    assert job["result"]["run_id"] == "learn-synthetic"
+    assert job["result"]["run_id"] == "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert calls == [("run", spec)]
     assert app.state.research.calls == []
     assert client.get(f"/api/v1/jobs/{job['id']}/result").json()["family"] == "cross_sectional_return_v1"
@@ -153,7 +153,7 @@ def test_learning_cli_preserves_explicit_symbols_and_fold_parameters(learning_ap
     assert spec["backend"] == "qlib"
     assert spec["test_sessions"] == 21
     assert spec["max_folds"] == 2
-    assert "learn-synthetic" in capsys.readouterr().out
+    assert "learn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in capsys.readouterr().out
 
 
 def test_learning_report_shows_coverage_comparisons_and_qualification():

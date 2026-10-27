@@ -41,6 +41,7 @@ export async function request(path, options = {}) {
 }
 
 export const api = {
+  health: signal => request('/health',{signal}),
   studies: signal => request('/learning/studies',{signal}),
   study: (id,signal) => request(`/learning/studies/${encodeURIComponent(id)}?view=dashboard`,{signal}),
   studyPreflight: (body,signal) => request('/learning/studies/preflight',{method:'POST',body,signal}),
@@ -50,6 +51,11 @@ export const api = {
   activateRelease: (id,body,signal) => request(`/strategy/releases/${encodeURIComponent(id)}/activate`,{method:'POST',body,signal}),
   fusionRuns: signal => request('/fusion/runs',{signal}),
   fusionRun: (id,signal) => request(`/fusion/runs/${encodeURIComponent(id)}`,{signal}),
+  tradingSelections: signal => request('/trading/selections',{signal}),
+  planPreflight: (body,signal) => request('/trading/plans/preflight',{method:'POST',body,signal}),
+  scanDefaults: signal => request('/scans/defaults',{signal}),
+  scanDecisions: (id,values={},signal) => request(`/scans/${encodeURIComponent(id)}/decisions${queryString(values)}`,{signal}),
+  scanExplanation: (id,symbol,signal) => request(`/scans/${encodeURIComponent(id)}/explanations/${encodeURIComponent(symbol)}`,{signal}),
   tradingAccounts: signal => request('/trading/accounts',{signal}),
   tradingTemplate: signal => request('/trading/template',{signal}),
   tradingPlans: signal => request('/trading/plans',{signal}),
@@ -80,11 +86,11 @@ export const api = {
   marketMembers: (id, values, signal) => request(`/market/boards/${encodeURIComponent(id)}/members${queryString(values)}`, {signal}),
   marketSpecialties: (values, signal) => request(`/market/specialties${queryString(values)}`, {signal}),
   analyze: (body, signal) => request('/analyze', {method: 'POST', body, signal}),
-  jobs: signal => request('/jobs', {signal}),
+  jobs: (signal,values={}) => request(`/jobs${queryString(values)}`, {signal}),
   job: (id, signal) => request(`/jobs/${encodeURIComponent(id)}`, {signal}),
   submit: (kind, params, signal) => request('/jobs', {method: 'POST', body: {kind, params}, signal}),
   cancel: (id, signal) => request(`/jobs/${encodeURIComponent(id)}/cancel`, {method: 'POST', body: {}, signal}),
-  reports: signal => request('/reports', {signal}),
+  reports: (signal,values={}) => request(`/reports${queryString(values)}`, {signal}),
   report: (id, signal) => request(`/reports/${encodeURIComponent(id)}?view=dashboard`, {signal}),
   watchlist: signal => request('/watchlist', {signal}),
   accounts: signal => request('/accounts',{signal}),
@@ -107,6 +113,9 @@ export const api = {
   // Forward ledger is append-only research evidence; HTTP is read-only.
   forwardSummary: signal => request('/forward/summary', {signal}),
   forwardDays: (limit, signal) => request(`/forward/days${queryString({limit})}`, {signal}),
+  replayPreview: (body,signal) => request('/kronos/replays/preview',{method:'POST',body,signal}),
+  replayRuns: (signal,values={}) => request(`/kronos/replays${queryString(values)}`,{signal}),
+  replay: (id,signal) => request(`/kronos/replays/${encodeURIComponent(id)}`,{signal}),
   // Read-only effective-pool preview; creates no run directory and submits no job.
   backtestPreview: (body,signal) => request('/backtest/preview',{method:'POST',body,signal}),
   // Controlled action: build and save a next-session research plan from a completed backtest.
@@ -117,7 +126,7 @@ export const api = {
   learningCatalog: signal => request('/learning/catalog', {signal}),
   learningRuns: signal => request('/learning/runs', {signal}),
   learningRun: (id, signal) => request(`/learning/runs/${encodeURIComponent(id)}?view=dashboard`, {signal}),
-  predictionChart: (reference, signal) => request(`/predictions/${encodeURIComponent(reference)}/chart`, {signal}),
+  predictionChart: (reference, signal, {predictionRunId}={}) => request(`/predictions/${encodeURIComponent(reference)}/chart${queryString({prediction_run_id:predictionRunId})}`, {signal}),
   operations: signal => request('/data/operations',{signal}),
   operationPreview: (body,signal) => request('/data/operations/preview',{method:'POST',body,signal}),
   operationStart: (body,signal) => request('/data/operations/start',{method:'POST',body,signal}),
@@ -129,6 +138,14 @@ export const api = {
   dataScheduleApply: (body,signal) => request('/data/schedules/apply',{method:'POST',body,signal}),
   dataBackups: (values,signal) => request(`/data/backups${queryString(values)}`,{signal}),
   dataStorage: signal => request('/data/storage',{signal}),
+  learningRetentionCandidates: signal => request('/data/learning-retention/candidates',{signal}),
+  learningRetentionReview: (body,signal) => request('/data/learning-retention/reviews',{method:'POST',body,signal}),
+  learningRetentionConfirm: (body,signal) => request('/data/learning-retention/confirm',{method:'POST',body,signal}),
+  learningRetentionPlan: (id,signal) => request(`/data/learning-retention/plans/${encodeURIComponent(id)}`,{signal}),
+  learningRetentionCancel: (id,signal) => request(`/data/learning-retention/plans/${encodeURIComponent(id)}/cancel`,{method:'POST',body:{},signal}),
+  learningRetentionReconcile: (id,body,signal) => request(`/data/learning-retention/plans/${encodeURIComponent(id)}/reconcile`,{method:'POST',body,signal}),
+  storageUsage: (values,signal) => request(`/data/storage/usage${queryString(values)}`,{signal}),
+  refreshStorageUsage: (body,signal) => request('/data/storage/usage/refresh',{method:'POST',body,signal}),
   storageReview: (body,signal) => request('/data/storage/reviews',{method:'POST',body,signal}),
   storageConfirm: (body,signal) => request('/data/storage/confirm',{method:'POST',body,signal}),
   storageJob: (id,signal) => request(`/data/storage/jobs/${encodeURIComponent(id)}`,{signal})

@@ -38,7 +38,8 @@ from datetime import date, datetime, time as day_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from lake_equity.jobs import JobCancelled
+from lake_equity.jobs import JobCancelled, JobTerminationError
+from lake_equity.update_progress import UpdateProgress
 
 __all__ = ["PipelineService", "run_data_update"]
 
@@ -121,6 +122,12 @@ def _read_json(path: Path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError, UnicodeDecodeError):
         return None
+
+
+def _is_preview(record: dict) -> bool:
+    return (record.get("kind") == "preview"
+            or bool((record.get("params") or {}).get("dry_run"))
+            or bool((record.get("config") or {}).get("dry_run")))
 
 
 def _write_json_atomic(path: Path, payload) -> None:
@@ -293,12 +300,36 @@ def _calendar_sessions(root: Path, lake=None) -> tuple[list[str], str, str | Non
     return [], "unavailable", calendar_error
 
 
+def _coverage_catalog(lake) -> dict:
+    """Read coverage without the writer locks created by the upstream catalog."""
+    config = getattr(lake, "config", None)
+    if config is None:
+        return lake.catalog()
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.query.reader import _catalog_coverage_bounds, dataset_has_parquet
+
+    rows = []
+    for name, spec in sorted(DATASETS.items()):
+        state = lake.state(name)
+        stored = _read_json(config.meta_root / "state" / f"{name}.json") or {}
+        directory = (config.derived_root if spec.layer == "derived" else config.curated_root) / name
+        has_data = dataset_has_parquet(directory, dataset=name, meta_root=config.meta_root)
+        first, last = _catalog_coverage_bounds(config, name) if has_data and spec.partition_col else (None, None)
+        rows.append({"name": name, "has_data": has_data, "revision_id": state.get("revision_id"),
+                     "coverage_start": first.isoformat() if first else None,
+                     "coverage_end": last.isoformat() if last else None,
+                     "watermark": stored.get("last_success_trade_date") if spec.watermark else None,
+                     "snapshot_date": stored.get("last_snapshot_date")
+                     if not spec.watermark and spec.fetch_semantics == "snapshot" else None})
+    return {"datasets": rows}
+
+
 def _published_sessions(root: Path, lake=None) -> list[str]:
     """Fallback sessions derived from the published ``trading_calendar`` dataset."""
     start = end = None
     if lake is not None:
         try:
-            for row in (lake.catalog() or {}).get("datasets") or []:
+            for row in (_coverage_catalog(lake) or {}).get("datasets") or []:
                 if row.get("name") == "trading_calendar" or row.get("dataset") == "trading_calendar":
                     start = row.get("coverage_start")
                     end = row.get("coverage_end") or row.get("watermark")
@@ -578,7 +609,7 @@ def _build_coverage(root: Path, lake, target_date: str | None, release: dict | N
     rows: dict[str, dict] = {}
     catalog_error = None
     try:
-        for row in (lake.catalog() or {}).get("datasets") or []:
+        for row in (_coverage_catalog(lake) or {}).get("datasets") or []:
             name = row.get("name") or row.get("dataset")
             if name:
                 rows[str(name)] = dict(row)
@@ -732,15 +763,32 @@ def _outcome_degraded(outcomes: list[dict]) -> bool:
 
 
 def _terminate(process) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        # The venv executable is a launcher; terminating only it leaves the
+        # real interpreter (and collection workers) running on Windows.
+        try:
+            stopped = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if stopped.returncode:
+                raise JobTerminationError(f"无法确认采集进程树 {process.pid} 已停止，请检查任务进程。")
+            process.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise JobTerminationError(f"停止采集进程树 {process.pid} 失败，请检查任务进程。") from error
+        return
     try:
         process.terminate()
         process.wait(timeout=10)
-    except Exception:
+    except (OSError, subprocess.TimeoutExpired):
         try:
             process.kill()
-            process.wait()
-        except Exception:
-            pass
+            process.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise JobTerminationError(f"停止采集进程 {process.pid} 失败，请检查任务进程。") from error
 
 
 def _read_log_segment(path: Path, offset: int) -> str:
@@ -758,20 +806,19 @@ def _execute_update(command: list[str], cwd: Path, log_path: Path, progress, can
     creation = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     with log_path.open("a", encoding="utf-8") as output:
         start_offset = output.tell()
+        monitor = UpdateProgress(cwd, log_path, start_offset)
         process = subprocess.Popen(command, cwd=str(cwd), stdout=output, stderr=subprocess.STDOUT,
                                    creationflags=creation)
-        while process.poll() is None:
-            stop = False
-            if cancelled is not None:
-                try:
-                    stop = bool(cancelled())
-                except JobCancelled:
-                    stop = True  # The job-style callback raises instead of returning True.
-            if stop:
-                _terminate(process)
-                raise JobCancelled("数据更新已取消，已发布批次保留")
-            _notify(progress, phase="cne_data_update", pid=process.pid, log=log_path.name)
-            time.sleep(1)
+        try:
+            while process.poll() is None:
+                if cancelled is not None and cancelled():
+                    raise JobCancelled("数据更新已取消，已发布批次保留")
+                _notify(progress, phase="cne_data_update", pid=process.pid,
+                        log=log_path.name, **monitor.sample())
+                time.sleep(1)
+        except BaseException:
+            _terminate(process)
+            raise
     return process.returncode, _read_log_segment(log_path, start_offset)
 
 
@@ -822,7 +869,8 @@ def run_data_update(settings, lake, params, progress=None, cancelled=None,
         return result
     if not config_path.is_file():
         raise ValueError("缺少 configs/cnequity.toml；请先完成本地导入与配置")
-    _notify(progress, phase="cne_data_update_start", command=command, log=log_path.name)
+    _notify(progress, phase="cne_data_update_start", command=command, log=log_path.name,
+            message="等待数据写入锁，随后开始采集")
     with _operation_window(operation_lock, cancelled):
         returncode, text = _execute_update(command, root, log_path, progress, cancelled)
     outcomes = _parse_outcomes(text)
@@ -1295,6 +1343,10 @@ class PipelineService:
                              "message": "Coverage does not allow selection"})
         return {
             "schema": SCHEMA_PREVIEW,
+            "kind": "preview",
+            "status": "blocked" if blockers else "ready",
+            "status_label": "只读预检",
+            "exit_code": 4 if blockers else 0,
             "target_date": target,
             "calendar": {"source": calendar_source, "sessions": len(sessions),
                          "error": calendar_error, "session": coverage["calendar_session"]},
@@ -1319,6 +1371,7 @@ class PipelineService:
         stages = {stage_id: _stage(stage_id, title) for stage_id, title in STAGE_TITLES.items()}
         report = {
             "schema": SCHEMA_REPORT,
+            "kind": "preview" if values["dry_run"] else "pipeline",
             "pipeline_id": pipeline_id,
             "status": "failed",
             "exit_code": 1,
@@ -1340,6 +1393,8 @@ class PipelineService:
             "created_at": created_at,
             "finished_at": None,
         }
+        if values["dry_run"]:
+            report["status_label"] = "只读预检（历史记录）"
         update: dict = {"status": "skipped", "reason": "not_started", "outcomes": []}
         refit: dict = {}
         scan: dict = {}
@@ -1459,6 +1514,8 @@ class PipelineService:
                     _finish(stage, "cancelled", error=failed)
         except Exception as error:  # No silent success on an unexpected failure.
             failed = f"{type(error).__name__}: {error}"
+            if isinstance(error, JobTerminationError):
+                report.update(cancel_effective=False, cancel_note=str(error))
             for stage in stages.values():
                 if stage["status"] == "running":
                     _finish(stage, "failed", error=failed)
@@ -1480,6 +1537,8 @@ class PipelineService:
         try:
             if cancelled:
                 status, exit_code, error = "cancelled", 1, failed
+            elif failed:
+                status, exit_code, error = "failed", 1, failed
             else:
                 status, exit_code = _decide_status(blockers, update, refit, scan, backtest,
                                                    coverage)
@@ -1504,6 +1563,7 @@ class PipelineService:
             report["coverage"] = coverage
             state = {
                 "schema": SCHEMA_STATE,
+                "kind": report["kind"],
                 "pipeline_id": pipeline_id,
                 "status": status,
                 "exit_code": exit_code,
@@ -1538,6 +1598,8 @@ class PipelineService:
             record = _read_json(folder / "report.json") or _read_json(folder / "pipeline.json")
             if not isinstance(record, dict):
                 continue
+            if _is_preview(record):
+                continue
             stamp = str(record.get("finished_at") or record.get("created_at") or "")
             if best is None or stamp > best[0]:
                 best = (stamp, record)
@@ -1550,6 +1612,8 @@ class PipelineService:
         record = _read_json(folder / "report.json") or _read_json(folder / "pipeline.json")
         if not isinstance(record, dict):
             raise KeyError(pipeline_id)
+        if _is_preview(record):
+            return {**record, "kind": "preview", "status_label": "只读预检（历史记录）"}
         return record
 
     # -- internals ---------------------------------------------------------

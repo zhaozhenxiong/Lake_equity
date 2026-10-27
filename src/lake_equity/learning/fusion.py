@@ -48,7 +48,7 @@ class FusionService:
         with closing(sqlite3.connect(self.index.as_uri() + '?mode=ro', uri=True)) as conn:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='runs'").fetchone():
                 return {'reports': []}
-            rows = conn.execute('SELECT summary FROM runs ORDER BY rowid DESC LIMIT ?', (max(1, min(200, int(limit))),))
+            rows = conn.execute('SELECT summary FROM runs ORDER BY rowid DESC LIMIT ?', (-1 if limit is None else max(1, min(200, int(limit))),))
             return {'reports': [json.loads(row[0]) for row in rows]}
 
     def read_run(self, run_id):

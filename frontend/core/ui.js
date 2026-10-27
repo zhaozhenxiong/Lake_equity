@@ -20,7 +20,7 @@ export function dateTime(value) {
 export const pretty = value => escapeHtml(JSON.stringify(value, null, 2));
 export const activeJob = job => ['queued', 'pending', 'running', 'cancelling'].includes(job?.status);
 export const jobId = job => job?.id || job?.job_id || '';
-export const kindLabel = value => ({research_study:'十年研究',fusion_scan:'多因子与Kronos复核',trade_plan:'次日买卖计划',ten_year_model_study_v1:'十年研究报告',fusion_scan_v1:'融合选股报告',analysis:'结构分析', backtest:'模型策略回测', simulation:'模拟账户', scan:'模型选股', prediction:'Kronos 预测', training:'模型训练', factor_training:'统一模型训练',model_refit:'最终重拟合',frozen_factor_refit_v1:'最终重拟合报告',model_scan:'模型选股',model_backtest:'模型回测',model_scan_v1:'模型选股',model_backtest_v1:'模型回测',cross_sectional_return_v1:'训练实验', score_training:'评分训练', model_training:'完整模型训练', data_operation:'数据运维',update:'行情更新', import:'数据导入', board_features:'板块特征', board_sync:'板块同步', daily:'账户续算', score_observations:'预测观察'})[value] || value || '研究运行';
+export const kindLabel = value => ({scan_explanation:'指标解释附件',kronos_replay:'Kronos 逐日验证',storage_usage:'本地空间盘点',research_study:'十年研究',fusion_scan:'多因子与Kronos复核',trade_plan:'次日买卖计划',ten_year_model_study_v1:'十年研究报告',fusion_scan_v1:'融合选股报告',analysis:'结构分析', backtest:'模型策略回测', simulation:'模拟账户', scan:'模型选股', prediction:'Kronos 预测', training:'模型训练', factor_training:'统一模型训练',model_refit:'最终重拟合',frozen_factor_refit_v1:'最终重拟合报告',model_scan:'模型选股',model_backtest:'模型回测',model_scan_v1:'模型选股',model_backtest_v1:'模型回测',cross_sectional_return_v1:'训练实验', score_training:'评分训练', model_training:'完整模型训练', data_operation:'数据运维',update:'行情更新', import:'数据导入', board_features:'板块特征', board_sync:'板块同步', daily:'账户续算', score_observations:'预测观察'})[value] || value || '研究运行';
 export const statusLabel = value => ({queued:'排队中', pending:'待处理', running:'运行中', cancelling:'取消中', cancelled:'已取消', succeeded:'已完成', success:'已完成', complete:'已完成', completed:'已完成', partial:'部分完成', failed:'失败', blocked:'已阻止', available:'可用', unavailable:'不可用', ready:'已就绪', missing:'未就绪', verified:'已核验'})[value] || value || '未知';
 
 export function badge(value, label) {
@@ -87,7 +87,12 @@ export function errorAdvice(message, {cutoff = ''}={}) {
 
 export function showError(host, error) {
   if (error?.name === 'AbortError' || !host?.isConnected) return;
-  const target = host.querySelector('[data-page-error]') || host;
+  let target = host.matches?.('[data-page-error]') ? host : host.querySelector('[data-page-error]');
+  if (!target) {
+    target = document.createElement('div');
+    target.setAttribute('data-page-error','');
+    host.prepend(target);
+  }
   target.innerHTML = errorHtml(error);
 }
 
@@ -192,3 +197,4 @@ export function bindSymbolSearch(input, signal) {
   }, {signal});
   signal.addEventListener('abort', () => clearTimeout(timer), {once:true});
 }
+

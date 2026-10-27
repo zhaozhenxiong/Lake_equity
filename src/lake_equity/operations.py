@@ -63,6 +63,21 @@ class StorageConfirmation(Body):
     maintenance_confirmed: StrictBool = False
 
 
+class LearningRetentionReview(Body):
+    object_ids: list[str] = Field(min_length=1, max_length=2000)
+
+
+class LearningRetentionConfirmation(LearningRetentionReview):
+    plan_id: str
+    confirmation_token: str
+    confirmed: StrictBool
+    maintenance_confirmed: StrictBool
+
+
+class LearningRetentionReconcile(Body):
+    maintenance_confirmed: StrictBool
+
+
 class DataOperations:
     # A reviewed list, independent of arbitrary HTTP handlers or shell text.
     ALLOWED = frozenset({"snapshot.create", "snapshot.verify", "snapshot.restore", "daily.full", "daily.group",
@@ -223,5 +238,47 @@ def create_operations_router(service: DataOperations):
     def storage_confirm(body: StorageConfirmation):
         return service.storage().confirm(body.review_id, body.confirmation_token,
             confirmed=body.confirmed, maintenance=body.maintenance_confirmed)
+
+    return router
+
+
+def create_learning_retention_router(service, jobs):
+    router=APIRouter(prefix='/api/v1/data/learning-retention')
+
+    @router.get('/candidates')
+    def candidates():
+        return service.candidates()
+
+    @router.post('/reviews')
+    def review(body: LearningRetentionReview):
+        return service.review(body.object_ids)
+
+    @router.get('/plans/{plan_id}')
+    def plan(plan_id: str):
+        return service.read_plan(plan_id)
+
+    @router.get('/runs/{run_id}')
+    def run_state(run_id: str):
+        return service.status(run_id)
+
+    @router.post('/confirm',status_code=202)
+    def confirm(body: LearningRetentionConfirmation):
+        params=body.model_dump()
+        service.check_confirmation(params['plan_id'],params['confirmation_token'],params['object_ids'],
+            confirmed=params['confirmed'],maintenance_confirmed=params['maintenance_confirmed'])
+        job=jobs.submit('learning_retention',params)
+        service.bind_job(params['plan_id'],job['id'])
+        return {**job,'plan_id':params['plan_id']}
+
+    @router.post('/plans/{plan_id}/cancel')
+    def cancel(plan_id: str):
+        saved=service.read_plan(plan_id)
+        if not saved.get('job_id'):
+            raise ValueError('This retention plan has no cancellable background job')
+        return {**jobs.cancel(saved['job_id']),'plan_id':plan_id}
+
+    @router.post('/plans/{plan_id}/reconcile')
+    def reconcile(plan_id: str,body: LearningRetentionReconcile):
+        return service.reconcile(plan_id,maintenance_confirmed=body.maintenance_confirmed)
 
     return router

@@ -107,11 +107,11 @@ class LearningService:
                     qualification=dict(research_only=True, strict_history_eligible=False),
                     note='Read-only capabilities; no capture, feature calculation or training is triggered')
 
-    def list_runs(self):
+    def list_runs(self, limit=100):
         if not self.index.is_file():
             return {'runs': []}
         with closing(sqlite3.connect(self.index.as_uri() + '?mode=ro', uri=True)) as connection:
-            rows = connection.execute('SELECT summary FROM runs ORDER BY rowid DESC LIMIT 100').fetchall()
+            rows = connection.execute('SELECT summary FROM runs ORDER BY rowid DESC LIMIT ?', (-1 if limit is None else limit,)).fetchall()
         return {'runs': [json.loads(row[0]) for row in rows]}
 
     def read_run(self, run_id):

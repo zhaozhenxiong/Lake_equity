@@ -160,6 +160,8 @@ class BacktestPreview:
                                     last_session=sessions[-1] if sessions else None,
                                     available_sessions=len(sessions)),
                         universe_scope=universe_scope, release_universe_policy=policy,
+                        requested_universe_scope=universe_scope, effective_universe_scope=universe_scope,
+                        evaluation_universe_scope=None, eligibility_evaluated=False,
                         cap=(policy or {}).get('max_members') if universe_scope == 'release' else None,
                         per_symbol=[], counts=dict(requested=len(symbols), eligible=0, excluded=0),
                         warnings=warnings, blockers=blockers)
@@ -171,6 +173,7 @@ class BacktestPreview:
             frame = eligibility_for_symbols(session, symbols, sessions[0], sessions[-1],
                                             policy=policy, check_cancel=None)
             rows = self._eligibility_rows(frame, symbols, len(sessions))
+            response['eligibility_evaluated'] = True
             response['cap_applied'] = False
             response['warnings'].append('explicit_symbols: qualification rules applied, max_members cap skipped')
         else:
@@ -187,6 +190,7 @@ class BacktestPreview:
                 frame = metrics_for_symbols(artifact, sessions[0], sessions[-1], symbols)
                 rows = self._eligibility_rows(frame, symbols, len(sessions), ranked=True,
                                               cap=(policy or {}).get('max_members'))
+                response['eligibility_evaluated'] = True
         response['per_symbol'] = rows
         response['counts'] = dict(requested=len(symbols),
                                   eligible=sum(1 for row in rows if row['status'] == 'eligible'),
@@ -226,7 +230,11 @@ class BacktestPreview:
                                     first_session=sessions[0] if sessions else None,
                                     last_session=sessions[-1] if sessions else None,
                                     available_sessions=len(sessions)),
-                        universe_scope='release', release_universe_policy=(release.get('universe') or {}).get('policy'),
+                        universe_scope='explicit_symbols',
+                        requested_universe_scope=body.get('universe_scope') or 'release',
+                        effective_universe_scope='explicit_symbols', evaluation_universe_scope='release',
+                        eligibility_evaluated=False,
+                        release_universe_policy=(release.get('universe') or {}).get('policy'),
                         cap=None,
                         per_symbol=[dict(symbol=code,
                                          status='available' if code in original else 'unavailable',

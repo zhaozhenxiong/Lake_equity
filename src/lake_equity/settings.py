@@ -40,7 +40,7 @@ class Settings:
     def research_app(self) -> Path:
         return self.root / "packages/khquant_research/app"
 
-    def configure(self) -> None:
+    def configure(self, *, create_dirs: bool = True) -> None:
         for path in (self.root / "src", self.research_app, self.root / "vendor/cnequity/src"):
             if str(path) not in sys.path:
                 sys.path.insert(0, str(path))
@@ -62,5 +62,6 @@ class Settings:
             values["KHQUANT_COMPUTE_DEVICE"] = os.environ["LAKE_EQUITY_DEVICE"]
         os.environ.update(values)
         os.environ.setdefault("PROCESSOR_ARCHITECTURE", "AMD64")
-        for path in (self.metadata_root, self.artifact_root / "runs", self.root / "var/logs", self.raw_db.parent):
-            path.mkdir(parents=True, exist_ok=True)
+        if create_dirs:
+            for path in (self.metadata_root, self.artifact_root / "runs", self.root / "var/logs", self.raw_db.parent):
+                path.mkdir(parents=True, exist_ok=True)

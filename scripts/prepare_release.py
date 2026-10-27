@@ -2,21 +2,23 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import tomllib
 import zipfile
 
 
 ROOT_FILES = (
     ".gitignore", ".gitattributes", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.md", "pyproject.toml",
-    "install.py", "run.py", "lake.bat", "requirements-runtime.lock", "requirements-qlib.lock",
+    "install.py", "run.py", "lake.bat", "requirements-runtime.lock", "requirements-dev.lock", "requirements-qlib.lock",
 )
 PUBLIC_DOCS = ("LEARNING.md", "EXECUTION_RULES.md", "MARKET_FEATURES.md", "LEGACY_RETIREMENT.md", "RELEASE.md",
                "PIPELINE.md", "SHARPE_OPTIMIZATION_PLAN.md", "CHANGELOG.md", "provenance/ths_daily_bars_qualification.md")
-PUBLIC_SCRIPTS = ("prepare_release.py", "verify_learning_runtime.py", "install_chart_assets.py", "preview_market.py")
+PUBLIC_SCRIPTS = ("prepare_release.py", "verify_learning_runtime.py", "install_chart_assets.py", "preview_market.py", "validate_http.py", "validate_browser.mjs")
 PUBLIC_ASSETS = ("overview.png", "structure-analysis.jpg", "market-features.jpg", "data-coverage.png", "README.md")
 PRIVATE_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", "knowledge_base", "knowledge_base_system", "agent_prompts"}
 OMITTED_RESEARCH = ("my_strategy/docs/", "my_strategy/data/", "my_strategy/artifacts/", "my_strategy/kronos_model/")
@@ -40,30 +42,46 @@ def safe_relative(value: str) -> Path:
     return Path(*pure.parts)
 
 
+def source_declarations(root: Path, filename: str, collection: str, hash_fields: tuple[str, ...]) -> dict:
+    path = root / "docs/provenance" / filename
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(payload, dict) or type(payload.get("schema")) is not int
+            or payload["schema"] != 1 or not isinstance(payload.get(collection), list)):
+        raise ValueError(f"Invalid {filename} schema")
+    declarations = {}
+    for declaration in payload[collection]:
+        if (not isinstance(declaration, dict)
+                or declaration.get("source_manifest") not in {"cnequity_source.json", "khquant_source.json"}
+                or not isinstance(declaration.get("path"), str)
+                or not isinstance(declaration.get("reason"), str) or not declaration["reason"].strip()
+                or any(not isinstance(declaration.get(key), str)
+                       or not re.fullmatch(r"[0-9a-f]{64}", declaration[key]) for key in hash_fields)):
+            raise ValueError(f"Invalid declaration in {filename}")
+        safe_relative(declaration["path"])
+        key = declaration["source_manifest"], declaration["path"]
+        if key in declarations:
+            raise ValueError(f"Duplicate declaration in {filename}: {key}")
+        declarations[key] = declaration
+    return declarations
+
+
 def public_path(relative: Path) -> bool:
     return not (PRIVATE_PARTS.intersection(relative.parts) or relative.name == ".env"
+                or any(part.endswith((".egg-info", ".dist-info")) for part in relative.parts)
                 or relative.name.startswith(".env.") or relative.name == "AI_CHANGELOG.md"
                 or relative.suffix in {".pyc", ".pyo", ".log"})
 
 
 def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
     selected: dict[str, tuple[Path, str]] = {}
-    patches = {}
+    patches = source_declarations(root, "local_patches.json", "patches", ("original_sha256", "sha256"))
+    omissions = source_declarations(root, "local_omissions.json", "omissions", ("original_sha256",))
+    if patches.keys() & omissions.keys():
+        raise ValueError("A source path cannot be both patched and omitted")
     patch_manifest = root / "docs/provenance/local_patches.json"
-    if patch_manifest.exists():
-        payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or type(payload.get("schema")) is not int or payload["schema"] != 1 or not isinstance(payload.get("patches"), list):
-            raise ValueError("Invalid local patch manifest")
-        for patch in payload["patches"]:
-            if (not isinstance(patch, dict) or patch.get("source_manifest") not in {"cnequity_source.json", "khquant_source.json"}
-                    or not isinstance(patch.get("path"), str) or not isinstance(patch.get("reason"), str) or not patch["reason"].strip()
-                    or any(not isinstance(patch.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", patch[key]) for key in ("original_sha256", "sha256"))):
-                raise ValueError("Invalid local patch declaration")
-            safe_relative(patch["path"])
-            key = patch["source_manifest"], patch["path"]
-            if key in patches:
-                raise ValueError("Duplicate local patch declaration")
-            patches[key] = patch
+    omission_manifest = root / "docs/provenance/local_omissions.json"
 
     def add(path: Path, expected: str | None = None, public_relative: Path | None = None) -> None:
         relative = public_relative or path.relative_to(root)
@@ -95,6 +113,8 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
         add(root / "docs/provenance" / name)
     if patch_manifest.exists():
         add(patch_manifest)
+    if omission_manifest.exists():
+        add(omission_manifest)
 
     public_manifest = root / "release-manifest.json"
     if public_manifest.exists():
@@ -112,11 +132,13 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
     else:
         sources = []
         applied_patches = set()
+        applied_omissions = set()
         for name, base in (("cnequity_source.json", root / "vendor/cnequity"),
                            ("khquant_source.json", root / "packages/khquant_research/app")):
             manifest_path = root / "docs/provenance" / name
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             included = 0
+            omitted = 0
             for entry in manifest["files"]:
                 relative = safe_relative(entry["path"])
                 key = name, entry["path"]
@@ -130,6 +152,15 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
                 path = base / relative
                 if name == "khquant_source.json" and not path.is_file():
                     path = base.parent / relative
+                omission = omissions.get(key)
+                if omission:
+                    if omission["original_sha256"] != expected:
+                        raise ValueError(f"Local omission original SHA mismatch: {name}: {entry['path']}")
+                    applied_omissions.add(key)
+                    if path.is_file():
+                        raise ValueError(f"Reviewed omission is still present: {name}: {entry['path']}")
+                    omitted += 1
+                    continue
                 if not path.is_file() or sha256(path) != expected:
                     raise ValueError(f"Frozen input changed: {name}: {entry['path']}")
                 if name == "khquant_source.json" and entry["path"].startswith(OMITTED_RESEARCH):
@@ -137,19 +168,26 @@ def select_files(root: Path) -> tuple[dict[str, tuple[Path, str]], dict]:
                 before = len(selected)
                 add(path, expected)
                 included += len(selected) - before
-            sources.append({
+            source = {
                 "source": name.removesuffix("_source.json"),
                 "version": manifest.get("version"), "git_head": manifest.get("git_head"),
                 "dirty": manifest.get("dirty"), "archive_sha256": manifest.get("archive_sha256"),
                 "original_manifest_sha256": sha256(manifest_path),
                 "original_file_count": len(manifest["files"]), "distributed_file_count": included,
-            })
+            }
+            if omitted:
+                source["omitted_file_count"] = omitted
+            sources.append(source)
         if applied_patches != set(patches):
             raise ValueError("Local patch is not present in its original source manifest")
+        if applied_omissions != set(omissions):
+            raise ValueError("Local omission is not present in its original source manifest")
         provenance = {"schema": 1, "sources": sources,
-                      "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original native wheel bytes are unchanged; any reviewed local source patches are declared separately."}
+                      "note": "Reviewed source subset; private migration/audit state and historical research documents are omitted. Original native wheel bytes are unchanged; reviewed local source patches and omissions are declared separately."}
         if patches:
             provenance["local_patches"] = [patches[key] for key in sorted(patches)]
+        if omissions:
+            provenance["local_omissions"] = [omissions[key] for key in sorted(omissions)]
     return selected, provenance
 
 
@@ -159,6 +197,13 @@ def build_release(root: Path, output: Path, version: str) -> dict:
         raise ValueError("Use a numeric semantic version, for example 0.1.0")
     if output.exists():
         raise FileExistsError("Release output must be a new directory")
+    project_version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    tree = ast.parse((root / "src/lake_equity/__init__.py").read_text(encoding="utf-8"))
+    package_version = next((ast.literal_eval(node.value) for node in tree.body
+                            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__"
+                                                                     for target in node.targets)), None)
+    if version != project_version or package_version != project_version:
+        raise ValueError("Release, pyproject.toml and package versions must match")
     selected, provenance = select_files(root)
     repository = output / "repo"
     repository.mkdir(parents=True)

@@ -160,3 +160,21 @@ MLP 为 `d→64→32→1`，使用 GELU、Dropout、AdamW 和验证 MSE 早停�
 不可变版本位于 `var/learning/models`，新选股和回测位于 `var/learning/workflows`，均使用 SQLite 索引和内容清单。失败构建保留隔离目录，清理走 `maintenance --quarantine-preview` 与显式确认（见上）。融资融券 T+2 仍为披露的研究假设，当前人口、复权和公司行为仍未认证；负结果如实保存，不按测试收益自动调参或翻转信号。
 
 上游参考：[StaticDataLoader](https://github.com/microsoft/qlib/blob/v0.9.8/qlib/data/dataset/loader.py)、[处理器](https://github.com/microsoft/qlib/blob/v0.9.8/qlib/data/dataset/processor.py)、[LightGBM](https://github.com/microsoft/qlib/blob/v0.9.8/qlib/contrib/model/gbdt.py)、[滚动重拟合示例](https://github.com/microsoft/qlib/blob/v0.9.8/examples/rolling_process_data/workflow.py)。这些链接用于设计依据；实际运行版本以环境与报告记录为准。
+
+## 训练交换文件生命周期与空间回收
+
+新 Qlib 折训练在 worker 成功交付、评分和保存模型/预处理校验通过后，移除本次新建的临时 `train.parquet`、`valid.parquet`、`test.parquet`，并在模型详情记录 `worker_exchange_retention`。该交付阶段失败或取消时保留交换输入；已经成功交付的折不因后续研究中断重新生成输入。模型、预处理、worker `scores.parquet`、原 `dataset.parquet` 与 `predictions.parquet` 继续保留。
+
+旧已存实验不会因升级自动清理。空间回收仅接受已完成实验的精确训练交换文件清单：先只读 candidates，再 review，最后携带原 `plan_id`、确认 token、原完整对象集合及维护确认执行。`.building`、检查点引用、活动任务、未知清单和未闭合硬链接均受保护；不能把整个模型目录或历史实验作为删除路径。
+
+页面的“训练交换文件已退休”提示表示这些原始 worker 输入的重用与逐字节完整训练交换审计已不可用，不表示模型或原始研究结果被删除。原 `report.json` 字节与 SHA 保持不变；独立 retention manifest 记录原产物身份、原因和能力变化，模型推理、保存的样本外结果与滚动/关注池回放继续使用保留资产。完整原报告仍可读取，dashboard 另显示退休状态。
+
+API 前缀为 `/api/v1/data/learning-retention`：`GET /candidates`、`POST /reviews`、`POST /confirm`；`GET /plans/{plan_id}` 可在维护期间查看进度。确认有效期为 30 分钟；取消在安全文件边界停止，已完成的删除不会撤销。过期审批不能继续删除；`POST /plans/{plan_id}/reconcile` 仅补齐已有删除意图的审计，再为剩余候选重新 review。
+
+CLI 最小入口如下；`object_ids.json` 是精确候选 ID 的 JSON 数组。服务运行时优先使用 API，CLI 确认要求独占服务锁。
+
+```powershell
+.\.venv\Scripts\python.exe -B -m lake_equity.cli learning-retention candidates
+.\.venv\Scripts\python.exe -B -m lake_equity.cli learning-retention review --objects object_ids.json
+.\.venv\Scripts\python.exe -B -m lake_equity.cli learning-retention confirm PLAN_ID --token TOKEN --objects object_ids.json --confirmed --maintenance-confirmed
+```

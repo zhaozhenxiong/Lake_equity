@@ -23,6 +23,10 @@ class JobCancelled(RuntimeError):
     pass
 
 
+class JobTerminationError(RuntimeError):
+    """The collector could not be confirmed stopped after cancellation."""
+
+
 class JobManager:
     def __init__(self, root: Path, dispatch: Callable):
         self.root = Path(root)
@@ -50,9 +54,9 @@ class JobManager:
             connection.execute("UPDATE jobs SET body=? WHERE id=?", (json.dumps(body, ensure_ascii=False, default=str), body["id"]))
             connection.commit()
 
-    def list(self, limit: int = 100) -> list[dict]:
+    def list(self, limit: int | None = 100) -> list[dict]:
         with self.connection() as connection:
-            return [json.loads(row[0]) for row in connection.execute("SELECT body FROM jobs ORDER BY rowid DESC LIMIT ?", (limit,))]
+            return [json.loads(row[0]) for row in connection.execute("SELECT body FROM jobs ORDER BY rowid DESC LIMIT ?", (-1 if limit is None else limit,))]
 
     def get(self, identity: str) -> dict:
         with self.connection() as connection:
@@ -80,8 +84,10 @@ class JobManager:
             return body
 
     def _execute(self, identity: str) -> None:
+        stop = self.stops[identity]
+
         def cancelled() -> bool:
-            return self.stops[identity].is_set()
+            return stop.is_set()
 
         def progress(*values, **fields):
             if values and isinstance(values[0], dict):
@@ -100,6 +106,7 @@ class JobManager:
             if cancelled():
                 body.update(status="cancelled", updated_at=now())
                 self._save(body)
+                self.stops.pop(identity, None)
                 return
             body.update(status="running", updated_at=now())
             self._save(body)
@@ -117,7 +124,10 @@ class JobManager:
                 body.update(status=outcome, updated_at=now(), result={"path": result_path.name, "sha256": hashlib.sha256(encoded).hexdigest(),
                             "run_id": result.get("lake_run_id", result.get("run_id", result.get("manifest_id")))})
                 body["business_status"] = reported
-                if cancelled() and outcome != "cancelled":
+                if result.get("cancel_effective") is False and result.get("cancel_note"):
+                    body.update(cancel_requested=True, cancel_effective=False,
+                                cancel_note=result["cancel_note"])
+                elif cancelled() and outcome != "cancelled":
                     body.update(cancel_requested=True, cancel_effective=False,
                                 cancel_note="取消请求到达时本次计算已完成并保存；结果保留，没有将已完成任务标为已停止。")
                 elif outcome == "cancelled":
@@ -125,9 +135,10 @@ class JobManager:
                 body["run_id"] = body["result"]["run_id"]
                 self._save(body)
         except Exception as error:
+            termination_failed = isinstance(error, JobTerminationError)
             failure = {
                 "schema": "job_error_v1",
-                "status": "cancelled" if cancelled() or isinstance(error, JobCancelled) else "failed",
+                "status": "failed" if termination_failed else "cancelled" if cancelled() or isinstance(error, JobCancelled) else "failed",
                 "job_id": identity,
                 "kind": body.get("kind"),
                 "error": f"{type(error).__name__}: {error}",
@@ -155,7 +166,14 @@ class JobManager:
                     body["run_id"] = None
                 if status == "cancelled":
                     body.update(cancel_effective=True, cancel_note="任务已响应取消，已保存批次保留。")
+                elif termination_failed:
+                    body.update(cancel_requested=True, cancel_effective=False,
+                                cancel_note=str(error))
                 self._save(body)
+
+        finally:
+            with self.lock:
+                self.stops.pop(identity, None)
 
     def result(self, identity: str) -> dict:
         body = self.get(identity)
@@ -177,6 +195,8 @@ class JobManager:
             return body
 
     def close(self) -> None:
-        for stop in self.stops.values():
+        with self.lock:
+            stops = list(self.stops.values())
+        for stop in stops:
             stop.set()
         self.executor.shutdown(wait=True, cancel_futures=False)

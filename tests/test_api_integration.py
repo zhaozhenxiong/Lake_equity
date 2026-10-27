@@ -117,8 +117,12 @@ def integrated_app(tmp_path, monkeypatch):
 
     workflow_module = types.ModuleType("lake_equity.learning.workflow")
     workflow_module.LearningWorkflow = FakeWorkflow
+    from lake_equity.learning.registry import canonical, digest
+
     registry_module = types.ModuleType("lake_equity.learning.registry")
     registry_module.ModelRegistry = FakeRegistry
+    registry_module.canonical = canonical
+    registry_module.digest = digest
     monkeypatch.setitem(sys.modules, "lake_equity.learning.workflow", workflow_module)
     monkeypatch.setitem(sys.modules, "lake_equity.learning.registry", registry_module)
 
@@ -228,7 +232,7 @@ def test_final_refit_is_an_explicit_new_job_without_old_training(integrated_app,
 
 
 def test_degraded_cne_daily_is_not_promoted_by_materialization(integrated_app, monkeypatch):
-    import lake_equity.app
+    import lake_equity.pipeline
 
     client, app, settings = integrated_app
 
@@ -243,7 +247,7 @@ def test_degraded_cne_daily_is_not_promoted_by_materialization(integrated_app, m
         def poll(self):
             return self.returncode
 
-    monkeypatch.setattr(lake_equity.app.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(lake_equity.pipeline.subprocess, "Popen", FakeProcess)
     submitted = client.post("/api/v1/jobs", json={"kind": "update", "params": {}})
     assert submitted.status_code == 202
     identity = submitted.json()["id"]

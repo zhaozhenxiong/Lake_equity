@@ -1,2 +1,0 @@
-[console_scripts]
-lake-equity = lake_equity.cli:main

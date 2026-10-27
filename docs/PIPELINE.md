@@ -17,6 +17,8 @@
 
 `--end YYYY-MM-DD` 指定目标日；省略时使用最近已收盘交易日。`--packs core|extended|full` 选择采集范围，其中 extended/full 当前均调用上游完整日更流程。`--no-scan`、`--no-backtest` 可跳过相应阶段。完整参数以 `pipeline --help` 为准。
 
+CLI `--dry-run` 与 HTTP `GET /api/v1/pipeline/preview` 使用同一只读预检，不创建流水线报告或计算租约；通过退出0，阻断退出4。兼容的 `POST /api/v1/jobs` 的 `pipeline + dry_run=true` 可以留下明确分类的预检审计记录，最近正式运行及首页会排除这些记录。日常页面预检沿用后端默认交易目标日，已有预检记录继续可读。
+
 ## 覆盖与阻断
 
 必需数据由 active 发布的 `data_contract` 决定。覆盖必须满足目标日要求，缺失时阻断后续研究；可选缺口逐项记录。来源和覆盖以本机实际发布数据为准，能力目录存在或采集命令退出成功不代表覆盖完整。

@@ -170,6 +170,50 @@ def test_invalid_local_patch_declaration_fails_closed(tmp_path, change):
     assert result["sources"][0]["source"] == "local_patches.json"
 
 
+@pytest.mark.parametrize("tamper", [None, "undeclared", "original_sha256", "path", "present"])
+def test_legacy_omission_requires_exact_original_hash_and_absent_file(tmp_path, tamper):
+    test_legacy_source_manifests_remain_supported(tmp_path)
+    source = tmp_path / "vendor/cnequity/source.py"
+    original_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    if tamper != "present":
+        source.unlink()
+    omission = dict(source_manifest="cnequity_source.json", path="source.py",
+                    original_sha256=original_sha256, reason="Synthetic reviewed source omission")
+    if tamper == "original_sha256":
+        omission["original_sha256"] = "0" * 64
+    elif tamper == "path":
+        omission["path"] = "unknown.py"
+    if tamper != "undeclared":
+        (tmp_path / "docs/provenance/local_omissions.json").write_text(
+            json.dumps(dict(schema=1, omissions=[omission])), encoding="utf-8")
+    result = verify(tmp_path)
+    assert result["status"] == ("ok" if tamper is None else "failed")
+    if tamper is None:
+        assert result["sources"][0]["files_omitted"] == 1
+
+
+@pytest.mark.parametrize("change", ["bad_schema", "bad_hash", "empty_reason", "duplicate", "escaping_path"])
+def test_invalid_local_omission_declaration_fails_closed(tmp_path, change):
+    test_legacy_source_manifests_remain_supported(tmp_path)
+    omission = dict(source_manifest="cnequity_source.json", path="source.py",
+                    original_sha256="a" * 64, reason="Synthetic reviewed omission")
+    payload = dict(schema=1, omissions=[omission])
+    if change == "bad_schema":
+        payload["schema"] = True
+    elif change == "bad_hash":
+        omission["original_sha256"] = "not-a-hash"
+    elif change == "empty_reason":
+        omission["reason"] = ""
+    elif change == "duplicate":
+        payload["omissions"].append(omission)
+    else:
+        omission["path"] = "../outside.py"
+    (tmp_path / "docs/provenance/local_omissions.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = verify(tmp_path)
+    assert result["status"] == "failed"
+    assert result["sources"][0]["source"] == "local_omissions.json"
+
+
 @pytest.mark.parametrize("tamper", [False, True])
 def test_cli_source_failure_has_nonzero_exit(tmp_path, monkeypatch, capsys, tamper):
     manifest(tmp_path)

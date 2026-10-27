@@ -423,6 +423,7 @@ def test_run_data_update_terminates_child_on_job_style_cancel(root, monkeypatch)
             events["killed"] = True
 
     monkeypatch.setattr(pipeline.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(pipeline, "_terminate", lambda child: events.update(terminated=True))
     monkeypatch.setattr(pipeline.time, "sleep", lambda seconds: None)
 
     def cancelled():
@@ -442,6 +443,23 @@ def test_run_data_update_without_config_refuses_before_spawning(tmp_path, monkey
     bare.mkdir()
     with pytest.raises(ValueError, match="configs/cnequity.toml"):
         run_data_update(bare, object(), {})
+
+
+def test_update_termination_failure_is_not_reported_as_cancelled(root, patched, monkeypatch):
+    from lake_equity.jobs import JobTerminationError
+
+    def stop_failed(*args, **kwargs):
+        raise JobTerminationError("无法确认采集进程树已停止")
+
+    monkeypatch.setattr(pipeline, "run_data_update", stop_failed)
+    report = PipelineService(root, build_lake(root)).run({"end": TARGET})
+    assert report["status"] == "failed"
+    assert report["exit_code"] == 1
+    assert report["cancel_effective"] is False
+    assert "无法确认" in report["cancel_note"]
+    stages = {stage["id"]: stage for stage in report["stages"]}
+    assert stages["S1"]["status"] == "failed"
+    assert stages["S5"]["status"] == "skipped"
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +549,9 @@ def test_artifacts_are_atomic_and_readable(root, patched):
     assert state["pipeline_id"] == report["pipeline_id"]
     assert coverage["pipeline_id"] == report["pipeline_id"]
 
-    assert service.latest()["pipeline_id"] == report["pipeline_id"]
+    assert service.latest() is None  # Historical preflights never replace a formal run.
+    assert saved["kind"] == state["kind"] == "preview"
+    assert saved["status_label"] == "只读预检（历史记录）"
     assert service.read(report["pipeline_id"])["pipeline_id"] == report["pipeline_id"]
     with pytest.raises(KeyError):
         service.read("pipe-" + "0" * 16)

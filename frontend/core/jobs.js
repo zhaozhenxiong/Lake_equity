@@ -9,9 +9,26 @@ export function cancellationNotice(job) {
   return `<div class="notice" role="status"><strong>${title}</strong>${job.cancel_note?`<p>${escapeHtml(job.cancel_note)}</p>`:''}</div>`;
 }
 
+function duration(seconds) {
+  const value=Math.max(0,Math.floor(seconds));
+  return `${value>=3600?`${Math.floor(value/3600)}时`:''}${value>=60?`${Math.floor(value%3600/60)}分`:''}${value%60}秒`;
+}
+
+export function progressSummary(job) {
+  const detail=job.progress_detail || {},fields=typeof job.progress==='object' && job.progress!==null?{...detail,...job.progress}:detail;
+  const stage=fields.stage || '';
+  const message=fields.message || fields.phase || '';
+  const text=stage && message && stage!==message?`${stage} · ${message}`:stage || message || job.error || jobId(job);
+  const percent=progressValue(job),facts=[];
+  if(percent!==null)facts.push(`${fields.progress_scope==='current_stage'?'当前步骤 ':''}${Math.round(percent)}%`);
+  if(typeof fields.elapsed_seconds==='number' && Number.isFinite(fields.elapsed_seconds))facts.push(`已用 ${duration(fields.elapsed_seconds)}`);
+  if(typeof fields.idle_seconds==='number' && Number.isFinite(fields.idle_seconds) && fields.idle_seconds>=60)facts.push(`最近进展 ${duration(fields.idle_seconds)}前`);
+  return `<div data-job-progress><p>${escapeHtml(text)}</p>${facts.length?`<div class="small muted">${escapeHtml(facts.join(' · '))}</div>`:''}${fields.warning?`<div class="notice space-top" role="status">${escapeHtml(fields.warning)}</div>`:''}</div>`;
+}
+
 export function jobSummary(job) {
   const progress=progressValue(job);
-  return `<div class="job-inline-top"><div><strong>${escapeHtml(kindLabel(job.kind))}</strong> ${badge(job.status)}</div><a href="${escapeHtml(routeLink('tasks',{job:jobId(job)}))}">查看任务</a></div>${progress!==null?`<div class="progress"><span style="width:${progress}%"></span></div>`:''}<p>${escapeHtml(job.progress?.stage || job.progress?.phase || job.progress_detail?.stage || job.progress_detail?.phase || job.error || jobId(job))}${progress!==null?` · ${Math.round(progress)}%`:''}</p>${adviceHtml(job.error)}${cancellationNotice(job)}${activeJob(job)?`<button class="small-button danger space-top" data-cancel-inline="${escapeHtml(jobId(job))}">取消任务</button>`:''}`;
+  return `<div class="job-inline-top"><div><strong>${escapeHtml(kindLabel(job.kind))}</strong> ${badge(job.status)}</div><a href="${escapeHtml(routeLink('tasks',{job:jobId(job)}))}">查看任务</a></div>${progress!==null?`<div class="progress"><span style="width:${progress}%"></span></div>`:''}${progressSummary(job)}${adviceHtml(job.error)}${cancellationNotice(job)}${activeJob(job)?`<button class="small-button danger space-top" data-cancel-inline="${escapeHtml(jobId(job))}">取消任务</button>`:''}`;
 }
 
 export function watchJob(host, initial, {signal,onComplete,onError}={}) {

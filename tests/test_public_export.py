@@ -53,7 +53,7 @@ def source_tree(tmp_path, exporter):
         expected.add(relative)
 
     for relative in exporter.ROOT_FILES:
-        public(relative)
+        public(relative, '[project]\nname = "lake-equity"\nversion = "0.1.0"\n' if relative == "pyproject.toml" else "synthetic public source\n")
     for name in exporter.PUBLIC_DOCS:
         public(f"docs/{name}")
     for name in exporter.PUBLIC_SCRIPTS:
@@ -65,7 +65,7 @@ def source_tree(tmp_path, exporter):
     for relative in ("src/lake_equity/__init__.py", "src/lake_equity/data/__init__.py",
                      "frontend/index.html", "frontend/vendor/LICENSE.synthetic",
                      "tests/test_synthetic.py", "third_party/synthetic/LICENSE"):
-        public(relative)
+        public(relative, '__version__ = "0.1.0"\n' if relative == "src/lake_equity/__init__.py" else "synthetic public source\n")
 
     frozen = [
         ("cnequity_source.json", "vendor/cnequity", [
@@ -103,6 +103,7 @@ def source_tree(tmp_path, exporter):
         "docs/PRIVATE.md", "docs/provenance/state_migration.json", ".env", ".env.local",
         "private-audit.json", "docs/assets/private.png", "src/.env", "src/lake_equity/__pycache__/private.pyc",
         "frontend/node_modules/private.js", "tests/.pytest_cache/private.json",
+        "src/lake_equity.egg-info/PKG-INFO", "src/lake_equity-0.0.1.dist-info/METADATA",
         "tests/test_fill_lake.py", "tests/test_fill_lake_years.py", "tests/test_repair_calendar.py",
         "packages/khquant_research/app/my_strategy/unlisted-audit.json",
         "packages/khquant_research/app/my_strategy/configs/unlisted-private.yaml",
@@ -122,6 +123,7 @@ def test_export_distributes_only_the_public_subset_and_preserves_source_data_res
     assert {path.relative_to(repository).as_posix() for path in repository.rglob("*")
             if path.is_file()} == expected
     assert "src/lake_equity/data/__init__.py" in expected
+    assert "scripts/validate_browser.mjs" in expected
     assert "packages/khquant_research/app/vendor/czsc/crates/czsc-utils/data/synthetic.csv" in expected
     assert snapshot(root) == before
     manifest = json.loads((repository / "release-manifest.json").read_text())
@@ -137,6 +139,45 @@ def test_export_distributes_only_the_public_subset_and_preserves_source_data_res
     assert (tmp_path / "export/SHA256SUMS.txt").read_text().split()[0] == result["sha256"]
 
 
+def test_reviewed_omission_is_verified_and_rebuilt_from_public_output(tmp_path, exporter, source_tree):
+    root, expected = source_tree
+    relative = "vendor/cnequity/contracts/v0.18.0.json"
+    original = root / relative
+    omission = dict(source_manifest="cnequity_source.json", path="contracts/v0.18.0.json",
+                    original_sha256=exporter.sha256(original), reason="Synthetic reviewed omission")
+    original.unlink()
+    write(root, "docs/provenance/local_omissions.json", json.dumps(dict(schema=1, omissions=[omission])))
+    expected.remove(relative)
+    expected.add("docs/provenance/local_omissions.json")
+    first = exporter.build_release(root, tmp_path / "export-one", "0.1.0")
+    repository = Path(first["repository"])
+    assert not (repository / relative).exists()
+    sources = json.loads((repository / "docs/provenance/sources.json").read_text())
+    cnequity = next(source for source in sources["sources"] if source["source"] == "cnequity")
+    assert cnequity["omitted_file_count"] == 1
+    assert sources["local_omissions"] == [omission]
+    second = exporter.build_release(repository, tmp_path / "export-two", "0.1.0")
+    assert second["sha256"] == first["sha256"]
+    assert snapshot(Path(second["repository"])) == snapshot(repository)
+
+
+@pytest.mark.parametrize("change", ["undeclared", "wrong_hash", "still_present"])
+def test_omission_does_not_hide_unreviewed_or_stale_source_changes(tmp_path, exporter, source_tree, change):
+    root, _ = source_tree
+    source = root / "vendor/cnequity/contracts/v0.18.0.json"
+    original_sha256 = exporter.sha256(source)
+    if change != "still_present":
+        source.unlink()
+    if change != "undeclared":
+        omission = dict(source_manifest="cnequity_source.json", path="contracts/v0.18.0.json",
+                        original_sha256="0" * 64 if change == "wrong_hash" else original_sha256,
+                        reason="Synthetic reviewed omission")
+        write(root, "docs/provenance/local_omissions.json", json.dumps(dict(schema=1, omissions=[omission])))
+    with pytest.raises(ValueError, match="Frozen input|omission"):
+        exporter.build_release(root, tmp_path / "must-not-exist", "0.1.0")
+    assert not (tmp_path / "must-not-exist").exists()
+
+
 def test_existing_output_is_never_overwritten(tmp_path, exporter, source_tree):
     root, _ = source_tree
     output = tmp_path / "existing"
@@ -145,6 +186,17 @@ def test_existing_output_is_never_overwritten(tmp_path, exporter, source_tree):
     with pytest.raises(FileExistsError):
         exporter.build_release(root, output, "0.1.0")
     assert snapshot(output) == before
+
+
+@pytest.mark.parametrize("mismatch", ["requested", "package"])
+def test_release_rejects_version_drift_before_writing_output(tmp_path, exporter, source_tree, mismatch):
+    root, expected = source_tree
+    if mismatch == "package":
+        write(root, "src/lake_equity/__init__.py", '__version__="0.0.1"\n')
+    output = tmp_path / "version-mismatch"
+    with pytest.raises(ValueError, match="versions must match"):
+        exporter.build_release(root, output, "0.2.0" if mismatch == "requested" else "0.1.0")
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("relative", [

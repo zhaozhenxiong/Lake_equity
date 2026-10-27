@@ -1,4 +1,5 @@
 import {day, empty, escapeHtml, number} from './ui.js';
+import {analysisPredictionCompatible,predictionQuality} from './prediction.js';
 
 export const chartColors = {up:'#d44b55', down:'#188768', navy:'#2d628c', teal:'#087f8c', line:'#edf2f7', muted:'#7b8fa1'};
 
@@ -42,8 +43,12 @@ export function createResearchChart(host, {readout, onSelect} = {}) {
   let layers = {pens:true,zones:true,fractals:false,sources:true,wyckoff:true,ict:true,volume:true};
   let overlay;
   let animation;
+  let forecastLines=[];
+  let forecastOverlay;
+  let forecastData;
 
   function zonePositions() {
+    forecastPositions();
     if (!chart || !overlay || !current) return;
     overlay.replaceChildren();
     if (!layers.zones) return;
@@ -58,6 +63,46 @@ export function createResearchChart(host, {readout, onSelect} = {}) {
       Object.assign(box.style,{left:`${Math.min(left,right)}px`,top:`${Math.min(top,bottom)}px`,width:`${Math.abs(right-left)}px`,height:`${Math.max(1,Math.abs(bottom-top))}px`});
       overlay.append(box);
     }
+  }
+
+  function forecastPositions(){
+    if(!forecastOverlay)return;
+    forecastOverlay.replaceChildren();
+    if(!chart || !forecastData || !candle)return;
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('viewBox',`0 0 ${host.clientWidth} ${host.clientHeight}`);
+    const add=(name,attributes,text)=>{const element=document.createElementNS('http://www.w3.org/2000/svg',name);for(const [key,value] of Object.entries(attributes))element.setAttribute(key,String(value));if(text)element.textContent=text;svg.append(element);};
+    const cutoff=chart.timeScale().timeToCoordinate(forecastData.cutoff);
+    const points=forecastData.forecast.map(row=>({x:chart.timeScale().timeToCoordinate(row.time),low:candle.priceToCoordinate(Number(row.low)),high:candle.priceToCoordinate(Number(row.high))})).filter(row=>[row.x,row.low,row.high].every(Number.isFinite));
+    if(Number.isFinite(cutoff)){
+      const right=points.at(-1)?.x;
+      if(Number.isFinite(right))add('rect',{x:cutoff,y:0,width:Math.max(0,right-cutoff+6),height:host.clientHeight,fill:forecastData.color,opacity:.035});
+      add('line',{x1:cutoff,x2:cutoff,y1:0,y2:host.clientHeight,stroke:'#6c869b','stroke-dasharray':'4 4','data-forecast-cutoff':forecastData.cutoff});
+      add('text',{x:Math.min(Math.max(4,cutoff+5),Math.max(4,host.clientWidth-270)),y:16,fill:forecastData.color,'font-size':10},`实际截止 ${forecastData.cutoff} → 未来采样情景`);
+    }
+    if(points.length){
+      const band=points.length===1?[[points[0].x-4,points[0].high],[points[0].x+4,points[0].high],[points[0].x+4,points[0].low],[points[0].x-4,points[0].low]]:[...points.map(row=>[row.x,row.high]),...points.slice().reverse().map(row=>[row.x,row.low])];
+      add('polygon',{points:band.map(point=>point.join(',')).join(' '),fill:forecastData.color,opacity:.16,'data-forecast-band':'p10-p90'});
+    }
+    forecastOverlay.append(svg);
+  }
+
+  function renderForecast(analysis,prediction){
+    for(const line of forecastLines)chart.removeSeries(line);
+    forecastLines=[];forecastData=null;forecastOverlay?.replaceChildren();
+    if(!prediction || frequency!=='日线')return;
+    const match=analysisPredictionCompatible(analysis,prediction.result,prediction.chart);
+    if(!match.compatible)throw new Error(match.reason);
+    const quality=predictionQuality(prediction.result,{chart:prediction.chart});
+    if(['unavailable','failed'].includes(quality.state))return;
+    const data=predictionSeries(prediction.chart);
+    if(data.forecast.some(row=>![row.low,row.high].every(value=>value!==null&&value!==undefined&&Number.isFinite(Number(value))&&Number(value)>0) || Number(row.low)>row.value || row.value>Number(row.high)))throw new Error('预测采样分位带无效，未叠加结构图。');
+    const color=quality.state==='degraded'?'#b97725':'#087f8c';
+    const last=data.history.at(-1),anchor=last?[{time:last.time,value:last.close}]:[];
+    const middle=series(chart,'line',{color,lineWidth:2,lineStyle:2,title:'预测P50',priceLineVisible:false});
+    middle.setData([...anchor,...data.forecast.map(row=>({time:row.time,value:row.value}))]);forecastLines.push(middle);
+    for(const key of ['low','high']){const bound=series(chart,'line',{color,lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});bound.setData(data.forecast.map(row=>({time:row.time,value:Number(row[key])})));forecastLines.push(bound);}
+    forecastData={...data,cutoff:day(prediction.chart.as_of),color};
   }
 
   function queueZones() {
@@ -76,10 +121,12 @@ export function createResearchChart(host, {readout, onSelect} = {}) {
     overlay = document.createElement('div');
     overlay.className = 'zone-overlay';
     host.append(overlay);
+    forecastOverlay=document.createElement('div');forecastOverlay.className='prediction-band-overlay';host.append(forecastOverlay);
     chart.timeScale().subscribeVisibleLogicalRangeChange(queueZones);
     chart.subscribeCrosshairMove(event => {
       const row = event.seriesData?.get(candle);
       if (readout && row) readout.innerHTML = `<strong>${escapeHtml(day(event.time))}</strong><span>开 ${number(row.open)}</span><span>高 ${number(row.high)}</span><span>低 ${number(row.low)}</span><span class="${row.close >= row.open ? 'up' : 'down'}">收 ${number(row.close)}</span>`;
+      if(readout && !row && forecastData){const point=forecastData.forecast.find(item=>item.time===day(event.time));if(point)readout.innerHTML=`<strong>${escapeHtml(point.time)} · 预测采样情景</strong><span>P10 ${number(point.low)}</span><span>P50 ${number(point.value)}</span><span>P90 ${number(point.high)}</span><span>分位带不是置信区间</span>`;}
       queueZones();
     });
     chart.subscribeClick(event => { if (event.time) onSelect?.(day(event.time)); });
@@ -140,6 +187,7 @@ export function createResearchChart(host, {readout, onSelect} = {}) {
     else if (markerPlugin) markerPlugin.setMarkers(safeMarkers);
     else if (globalThis.LightweightCharts.createSeriesMarkers) markerPlugin = globalThis.LightweightCharts.createSeriesMarkers(candle,safeMarkers);
     zones = section?.zones || [];
+    renderForecast(result,options.prediction);
     if (options.fit !== false) chart.timeScale().fitContent();
     queueZones();
     const last = bars.at(-1);
@@ -155,6 +203,7 @@ export function createResearchChart(host, {readout, onSelect} = {}) {
     markerPlugin = null;
     lines = [];
     overlay = null;
+    forecastOverlay=null;forecastLines=[];forecastData=null;
   }
 
   return {render,fit(){chart?.timeScale().fitContent();queueZones();},destroy(){host.removeEventListener('pointerup',queueZones);host.removeEventListener('wheel',queueZones);dispose();}};
